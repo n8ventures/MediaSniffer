@@ -4,7 +4,7 @@ mainGUI.py — CustomTkinter GUI for the GIF/video media scanner.
     pip install customtkinter tkinterdnd2 static-ffmpeg python-docx
 
 Run:
-    python main.py
+    python mainGUI.py
 
 Notes:
 - static-ffmpeg is optional but recommended: it downloads & caches a
@@ -29,11 +29,11 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 import modules.media_core as core
-from modules.platformModules import win, mac, icon
+from modules.platformModules import win, mac, icon, icon_png
 from modules.tkModules import watermark_label
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
 
-ctk.set_appearance_mode("dark")
+ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("assets/themes/Marcel.json")
 
 
@@ -43,6 +43,27 @@ def set_icon(root):
     elif mac:
         root.wm_iconphoto(True, ImageTk.PhotoImage(file=icon))
 
+
+icon_img = Image.open(icon_png).convert("RGBA")
+icon_img = icon_img.resize((256, 256), Image.LANCZOS)
+icon_img = icon_img.resize((64, 64), Image.LANCZOS)
+
+icon_ctkImage = ctk.CTkImage(
+    light_image=icon_img,
+    dark_image=icon_img,
+    size=(64, 64),
+)
+
+# (light, dark) tuples — same colors you picked, just packaged so CTk can
+# auto-update them on an appearance-mode toggle. A plain string (what the
+# if/else snapshot produced) is fixed at widget-creation time and won't
+# react to set_appearance_mode() being called later; a tuple does, with
+# zero extra refresh code needed anywhere a toggle button flips the mode.
+dir_color = ("#b8860b", "#f1c40f")
+error_color = ("#a52a2a", "#e05555")
+rows_color = ("#228b22", "#50fa7b")
+filename_color = ("#c71585", "#ff79c6")
+text_color = ("gray30", "gray70")
 
 # --------------------------------------------------------------------------
 # Optional drag-and-drop support. This is the "hybrid CTk + TkinterDnD"
@@ -71,11 +92,52 @@ def parse_dnd_paths(data):
     return [p.strip("{}") for p in re.findall(r"\{[^}]*\}|\S+", data)]
 
 
-# --------------------------------------------------------------------------
-# Checkbox definitions — id, label, and default state. Required fields
-# (Codec/Dimensions/FPS/Bitrate/Duration/Size) are never checkboxes; they're
-# always included by media_core.info_rows().
-# --------------------------------------------------------------------------
+def enable_precise_scrolling(scrollable_frame):
+    """Tk 9 <TouchpadScroll> (TIP 684) support for a CTkScrollableFrame.
+
+    Why the previous version didn't work: it bound <TouchpadScroll> only
+    on the canvas + the scrollable frame itself. But the pointer is almost
+    always over some *child* widget inside it (a label, a card, ...), and
+    Tk dispatches events to the widget directly under the pointer — not to
+    its ancestors — unless you bind on the global "all" bindtag. That's
+    exactly what CTkScrollableFrame does internally for <MouseWheel> (see
+    its `bind_all("<MouseWheel>", self._mouse_wheel_all)`), which is why
+    regular wheel scrolling worked everywhere while this didn't. Fixed by
+    mirroring that pattern: bind on "all" + walk up event.widget's .master
+    chain to confirm the event actually belongs to *this* scrollable
+    frame's canvas before scrolling it (same ownership check CTk uses).
+    """
+    if tk.TkVersion < 9.0:
+        return False
+
+    canvas = getattr(scrollable_frame, "_parent_canvas", None)
+    if canvas is None:
+        return False
+
+    def _belongs_to_this_canvas(widget):
+        while widget is not None:
+            if widget is canvas:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _on_touchpad_scroll(event):
+        if not _belongs_to_this_canvas(event.widget):
+            return
+        try:
+            dx, dy = map(int, canvas.tk.call("tk::PreciseScrollDeltas", event.delta))
+        except tk.TclError:
+            return
+        if dy and canvas.yview() != (0.0, 0.0):
+            canvas.yview_scroll(-1 if dy > 0 else 1, "units")
+
+    try:
+        scrollable_frame.bind_all("<TouchpadScroll>", _on_touchpad_scroll, add="+")
+    except tk.TclError:
+        return False  # Tk build doesn't support this event — safe no-op
+    return True
+
+
 CHECKBOX_DEFS = [
     ("lufs", "Integrated Loudness (LUFS)", False),
     ("true_peak", "True Peak (dBTP)", False),
@@ -84,7 +146,10 @@ CHECKBOX_DEFS = [
     ("container_info", "Container Format", False),
     ("creation_date", "Creation Date (metadata)", False),
     ("aspect_ratio", "Aspect Ratio", False),
+    ("tvc_slate", "Detect TVC Slate Beep (.mov 22s/37s)", False),
 ]
+
+PLATFORM_TARGET_OPTIONS = ["None"] + list(core.PLATFORM_TARGETS.keys())
 
 SAVE_FORMATS = [
     ("HTML (.html)", "html", ".html"),
@@ -111,13 +176,13 @@ class ProgressPopup(ctk.CTkToplevel):
         self.geometry(f"{width}x{height}+{x}+{y-35}")
         self.update_idletasks()
         self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", lambda: None)  # block manual close
+        self.protocol("WM_DELETE_WINDOW", lambda: None)
         self.grab_set()
 
         self.label_status = ctk.CTkLabel(self, text=f"Scanning 0 / {total}", font=("", 14, "bold"))
         self.label_status.pack(pady=(20, 6))
 
-        self.label_file = ctk.CTkLabel(self, text="", text_color="gray70")
+        self.label_file = ctk.CTkLabel(self, text="", text_color=text_color)
         self.label_file.pack(pady=(0, 12))
 
         self.progress = ctk.CTkProgressBar(self, width=340)
@@ -156,7 +221,7 @@ class ResultsWindow(ctk.CTkToplevel):
 
         header = ctk.CTkLabel(
             self,
-            text=f"🎞 {total_files} file(s) scanned  ·  {core.human_size(total_size)}"
+            text=f"🔍 {total_files} file(s) scanned  ·  {core.human_size(total_size)}"
             + (f"  ·  {error_files} error(s)" if error_files else ""),
             font=("", 15, "bold"),
         )
@@ -165,6 +230,7 @@ class ResultsWindow(ctk.CTkToplevel):
         # Scrollable results area
         self.scroll = ctk.CTkScrollableFrame(self)
         self.scroll.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        enable_precise_scrolling(self.scroll)
         self._build_results()
 
         # Bottom bar (Save As / Exit)
@@ -192,7 +258,7 @@ class ResultsWindow(ctk.CTkToplevel):
                 self.scroll,
                 text=f"📁 {entry['dir']}  ({count} file{'s' if count != 1 else ''})",
                 font=("", 14, "bold"),
-                text_color="#f1c40f",
+                text_color=dir_color,
             )
             dir_label.pack(fill="x", pady=(10, 2), anchor="w")
 
@@ -201,11 +267,11 @@ class ResultsWindow(ctk.CTkToplevel):
                 card.pack(fill="x", pady=4)
 
                 icon = "🎬" if info.get("kind") == "video" else "🖼️"
-                title = ctk.CTkLabel(card, text=f"{icon} {filename}", font=("", 13, "bold"), text_color="#ff79c6")
+                title = ctk.CTkLabel(card, text=f"{icon} {filename}", font=("", 13, "bold"), text_color=filename_color)
                 title.pack(anchor="w", padx=12, pady=(8, 2))
 
                 if "error" in info:
-                    err = ctk.CTkLabel(card, text=f"⚠ {info['error']}", text_color="#e05555")
+                    err = ctk.CTkLabel(card, text=f"⚠ {info['error']}", text_color=error_color)
                     err.pack(anchor="w", padx=12, pady=(0, 8))
                     continue
 
@@ -213,7 +279,12 @@ class ResultsWindow(ctk.CTkToplevel):
                 rows_frame.pack(fill="x", padx=12, pady=(0, 8))
                 for r, (label, value) in enumerate(core.info_rows(info, self.options)):
                     lbl = ctk.CTkLabel(
-                        rows_frame, text=f"{label}:", text_color="#50fa7b", font=("", 12, "bold"), anchor="w", width=150
+                        rows_frame,
+                        text=f"{label}:",
+                        text_color=rows_color,
+                        font=("", 12, "bold"),
+                        anchor="w",
+                        width=150,
                     )
                     lbl.grid(row=r, column=0, sticky="w", pady=1)
                     val = ctk.CTkLabel(rows_frame, text=str(value), anchor="w", justify="left")
@@ -254,8 +325,8 @@ class App(AppBaseClass):  # type: ignore
         super().__init__()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        width = 500
-        height = 600
+        width = 520
+        height = 680
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         self.title(__appname__)
@@ -271,7 +342,26 @@ class App(AppBaseClass):  # type: ignore
 
     # ---- UI construction -------------------------------------------------
     def _build_ui(self):
-        title = ctk.CTkLabel(self, text=f"🎞 {__appname__}", font=("", 20, "bold"))
+        # --- Light/dark toggle — pinned to the top-right corner via place(),
+        # independent of the packed layout below. A native menu bar felt
+        # like the wrong call here: on macOS it'd live outside the window
+        # entirely (top of screen, not in it), on Windows it'd bring back
+        # a strip of native chrome that clashes with an otherwise fully
+        # CTk-themed window. A small anchored icon button matches what the
+        # rest of the app already looks like.
+        self.theme_toggle_btn = ctk.CTkButton(
+            self,
+            text="☀️" if ctk.get_appearance_mode() == "Dark" else "🌑",
+            width=32,
+            height=32,
+            corner_radius=6,
+            font=("", 15),
+            command=self._toggle_appearance,
+        )
+        self.theme_toggle_btn.place(relx=1.0, x=-14, y=14, anchor="ne")
+
+        title = ctk.CTkLabel(self, text=f"{__appname__}", image=icon_ctkImage, compound="left", font=("", 20, "bold"))
+        title.image = icon_ctkImage
         title.pack(pady=(18, 4))
 
         subtitle = ctk.CTkLabel(
@@ -281,25 +371,20 @@ class App(AppBaseClass):  # type: ignore
 
         # --- Drop zone ---
         self.drop_zone = ctk.CTkFrame(
-            self, height=110, corner_radius=10, border_width=2, border_color="gray40", fg_color="gray17"
+            self, height=110, corner_radius=10, border_width=2, border_color="gray40", fg_color="#1e1e1e"
         )
         self.drop_zone.pack(fill="x", padx=20, pady=(0, 10))
         self.drop_zone.pack_propagate(False)
 
-        drop_text = (
-            "⬇  Drag & drop a file or folder here"
-            if DND_AVAILABLE
-            else "Drag & drop unavailable\n(install tkinterdnd2)"
-        )
-        self.drop_label = ctk.CTkLabel(self.drop_zone, text=drop_text, text_color="gray70")
+        drop_text = "⬇  Drag & drop a file or folder here" if DND_AVAILABLE else "Drag & drop unavailable"
+        self.drop_label = ctk.CTkLabel(self.drop_zone, text=drop_text, text_color="#ede5da", bg_color="transparent")
         self.drop_label.pack(expand=True)
 
         if DND_AVAILABLE:
             self.drop_zone.drop_target_register(DND_FILES)  # type: ignore
             self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore
 
-        # --- Buttons row ---
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
         btn_row.pack(fill="x", padx=20, pady=(0, 6))
         ctk.CTkButton(btn_row, text="📁 Select Folder", command=self._select_folder).pack(
             side="left", expand=True, fill="x", padx=(0, 6)
@@ -308,7 +393,7 @@ class App(AppBaseClass):  # type: ignore
             side="left", expand=True, fill="x", padx=(6, 0)
         )
 
-        self.path_label = ctk.CTkLabel(self, text="No file or folder selected", text_color="gray60", wraplength=440)
+        self.path_label = ctk.CTkLabel(self, text="No file or folder selected", text_color=text_color, wraplength=440)
         self.path_label.pack(pady=(4, 14), padx=20)
 
         # --- Optional data checkboxes ---
@@ -331,7 +416,24 @@ class App(AppBaseClass):  # type: ignore
             cb = ctk.CTkCheckBox(checks_frame, text=label, variable=var)
             cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 10), pady=4)
 
-        # --- Start button ---
+        target_row = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
+        target_row.pack(fill="x", padx=20, pady=(8, 0))
+        self.target_label = ctk.CTkLabel(target_row, text="Compare loudness to:", font=("", 11), text_color="gray55")
+        self.target_label.pack(side="left")
+        self.platform_target_var = tk.StringVar(value="None")
+        self.target_menu = ctk.CTkOptionMenu(
+            target_row,
+            values=PLATFORM_TARGET_OPTIONS,
+            variable=self.platform_target_var,
+            width=220,
+            state="disabled",
+        )
+        self.target_menu.pack(side="left", padx=(8, 0))
+        # Comparison is only meaningful once Integrated Loudness is measured
+        # (platform_delta_rows needs lufs_integrated, which only gets
+        # populated when that checkbox is on) — gate the control on it.
+        self.check_vars["lufs"].trace_add("write", self._on_lufs_toggle)
+
         self.start_btn = ctk.CTkButton(
             self, text="▶  Start Scan", height=40, font=("", 14, "bold"), state="disabled", command=self._start_scan
         )
@@ -339,6 +441,44 @@ class App(AppBaseClass):  # type: ignore
 
         self.status_label = ctk.CTkLabel(self, text="", text_color="gray55", font=("", 11))
         self.status_label.pack(pady=(0, 10))
+
+    def _on_lufs_toggle(self, *_):
+        if self.check_vars["lufs"].get():
+            self.target_menu.configure(state="normal")
+            self.target_label.configure(text_color=("gray10", "gray90"))
+        else:
+            self.platform_target_var.set("None")
+            self.target_menu.configure(state="disabled")
+            self.target_label.configure(text_color="gray55")
+
+    def _toggle_appearance(self):
+        new_mode = "Light" if ctk.get_appearance_mode() == "Dark" else "Dark"
+
+        # CTk's set_appearance_mode() doesn't recolor the window atomically —
+        # it fires a callback that walks every live CTk widget one at a time,
+        # and each one redraws its own canvas as it's visited. Tk paints each
+        # of those redraws to screen as it happens, so on a window with this
+        # many widgets you see the change roll across the UI top-to-bottom
+        # ("domino") instead of the whole window flipping at once.
+        #
+        # Fix: drop the window's opacity to 0 before triggering the mode
+        # change, so the whole cascade happens off-screen, then fade back in
+        # once every widget has finished redrawing. Reads as a clean "blink"
+        # instead of a wave. -alpha is supported on macOS/Windows; wrapped in
+        # try/except since some Linux window managers don't support it.
+        try:
+            self.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+
+        ctk.set_appearance_mode(new_mode)
+        self.theme_toggle_btn.configure(text="☀️" if new_mode == "Dark" else "🌑")
+        self.update_idletasks()  # force every widget to finish redrawing now, while hidden
+
+        try:
+            self.after(60, lambda: self.attributes("-alpha", 1.0))
+        except tk.TclError:
+            pass
 
     def _check_binaries(self):
         if not core.binaries_available():
@@ -370,16 +510,14 @@ class App(AppBaseClass):  # type: ignore
     def _set_paths(self, paths):
         self.selected_paths = paths
         if len(paths) == 1:
-            self.path_label.configure(text=paths[0], text_color="gray85")
+            self.path_label.configure(text=paths[0], text_color=text_color)
         else:
-            self.path_label.configure(text=f"{len(paths)} items selected", text_color="gray85")
+            self.path_label.configure(text=f"{len(paths)} items selected", text_color=text_color)
         self.start_btn.configure(state="normal")
 
     # ---- Scan lifecycle -----------------------------------------------------
     def _gather_files(self):
-        """Expand selected_paths (files and/or folders) into a list of
-        (display_dir, filepath) media files, folder-grouped."""
-        results = {}  # display_dir -> [filepath, ...]
+        results = {}
         for path in self.selected_paths:
             if os.path.isfile(path):
                 if core.is_media_file(path):
@@ -411,6 +549,7 @@ class App(AppBaseClass):  # type: ignore
             return
 
         options = {key: var.get() for key, var in self.check_vars.items()}
+        options["platform_target"] = self.platform_target_var.get() if options.get("lufs") else "None"
 
         self.start_btn.configure(state="disabled")
         popup = ProgressPopup(self, total)
