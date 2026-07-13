@@ -61,7 +61,7 @@ def resolve_binaries():
     try:
         import static_ffmpeg
 
-        ffmpeg_path, ffprobe_path = static_ffmpeg.run.get_or_fetch_platform_executables_else_raise()  # type: ignore
+        ffmpeg_path, ffprobe_path = static_ffmpeg.run.get_or_fetch_platform_executables_else_raise()
         _FFMPEG_PATH, _FFPROBE_PATH = ffmpeg_path, ffprobe_path
         return _FFMPEG_PATH, _FFPROBE_PATH
     except Exception:
@@ -171,6 +171,50 @@ def aspect_ratio_string(width, height, dar=None):
     return f"{width // g}:{height // g}"
 
 
+# ProRes' `profile` field reports plain names (Proxy/LT/Standard/HQ/4444/XQ);
+# map to Apple's actual marketing names for display.
+_PRORES_PROFILE_MAP = {
+    "proxy": "422 Proxy",
+    "lt": "422 LT",
+    "standard": "422",
+    "hq": "422 HQ",
+    "4444": "4444",
+    "xq": "4444 XQ",
+}
+
+
+def format_codec_profile(codec_name, profile, level):
+    """Human-readable profile/level suffix for the Codec field. ffprobe
+    exposes this the same way for ProRes, H.264, HEVC, and DNxHD/DNxHR —
+    codec_name alone is generic (e.g. always "prores" regardless of which
+    of the 6 ProRes variants it is); the actual variant lives in `profile`
+    (and `level`, meaningful only for H.264/HEVC)."""
+    if not profile or str(profile).strip().lower() in ("unknown", "", "none"):
+        return None
+
+    codec_name = (codec_name or "").lower()
+    profile = str(profile)
+
+    if codec_name == "prores":
+        return "ProRes " + _PRORES_PROFILE_MAP.get(profile.lower(), profile)
+
+    if codec_name in ("h264", "hevc", "h265"):
+        label = f"{profile} Profile"
+        try:
+            level = int(level)
+            if level > 0:
+                label += f" @ L{level / 10:.1f}"
+        except (TypeError, ValueError):
+            pass
+        return label
+
+    if codec_name == "dnxhd":
+        # ffprobe reports e.g. "DNXHD" or "DNXHR HQX" — normalize casing
+        return profile.replace("DNXHR", "DNxHR").replace("DNXHD", "DNxHD")
+
+    return profile  # generic fallback: whatever ffprobe called it
+
+
 # --------------------------------------------------------------------------
 # ffprobe — required + optional metadata (single call per file)
 # --------------------------------------------------------------------------
@@ -217,31 +261,35 @@ def extract_info(filepath, options):
     info = {"kind": "gif" if filepath.lower().endswith(".gif") else "video"}
 
     try:
-        info["size_bytes"] = os.path.getsize(filepath)  # type: ignore
+        info["size_bytes"] = os.path.getsize(filepath)
     except OSError:
-        info["size_bytes"] = fmt.get("size")  # type: ignore
+        info["size_bytes"] = fmt.get("size")
 
     # --- Required fields ---
     info["codec"] = video_stream.get("codec_name", "unknown").upper()
     info["codec_long"] = video_stream.get("codec_long_name", "")
+    info["codec_profile"] = format_codec_profile(
+        video_stream.get("codec_name"), video_stream.get("profile"), video_stream.get("level")
+    )
+    info["codec_tag"] = video_stream.get("codec_tag_string", "").strip() or None
     info["width"] = video_stream.get("width")
     info["height"] = video_stream.get("height")
     fps = parse_fps(video_stream.get("avg_frame_rate")) or parse_fps(video_stream.get("r_frame_rate"))
-    info["fps"] = fps  # type: ignore
+    info["fps"] = fps
 
     duration = fmt.get("duration") or video_stream.get("duration")
     info["duration"] = duration
     nb_frames_raw = video_stream.get("nb_frames")
     try:
-        info["frame_count"] = int(nb_frames_raw) if nb_frames_raw else None  # type: ignore
+        info["frame_count"] = int(nb_frames_raw) if nb_frames_raw else None
     except (TypeError, ValueError):
-        info["frame_count"] = None  # type: ignore
+        info["frame_count"] = None
 
-    info["bitrate"] = video_stream.get("bit_rate") or fmt.get("bit_rate")  # type: ignore
+    info["bitrate"] = video_stream.get("bit_rate") or fmt.get("bit_rate")
 
     # --- Audio presence (needed regardless of checkboxes, to know whether
     #     loudness analysis is even possible) ---
-    info["has_audio"] = audio_stream is not None  # type: ignore
+    info["has_audio"] = audio_stream is not None
 
     # --- Optional: audio track info ---
     if options.get("audio_info") and audio_stream:
@@ -259,7 +307,7 @@ def extract_info(filepath, options):
         depth = bit_depth_from_pix_fmt(pix_fmt)
         primaries = video_stream.get("color_primaries") or "N/A"
         info["color_summary"] = f"{depth}-bit · {primaries} · {hdr_label}" if depth else "N/A"
-        info["is_hdr"] = is_hdr  # type: ignore
+        info["is_hdr"] = is_hdr
 
     # --- Optional: container/format name ---
     if options.get("container_info"):
@@ -281,12 +329,19 @@ def extract_info(filepath, options):
     if options.get("lufs") or options.get("true_peak"):
         if not info["has_audio"]:
             if options.get("lufs"):
-                info["lufs_integrated"] = None  # type: ignore
+                info["lufs_integrated"] = None
             if options.get("true_peak"):
-                info["true_peak_db"] = None  # type: ignore
+                info["true_peak_db"] = None
         else:
             loud = analyze_loudness(filepath, options.get("lufs", False), options.get("true_peak", False))
             info.update(loud)  # type: ignore
+
+    # --- Optional: TVC slate beep (only fires when the heuristic matches) ---
+    if options.get("tvc_slate"):
+        info["is_tvc_candidate"] = is_probable_tvc(info, filepath)
+        if info["is_tvc_candidate"] and info["has_audio"]:
+            slate = analyze_slate_beep(filepath)
+            info["slate_beep_peak_db"] = slate.get("true_peak_db")
 
     return info
 
@@ -296,6 +351,13 @@ def extract_info(filepath, options):
 # hence gated behind checkboxes rather than always run).
 # --------------------------------------------------------------------------
 def analyze_loudness(filepath, want_integrated, want_peak, timeout=600):
+    """Integrated loudness (I) and true peak via ffmpeg's ebur128 filter —
+    a libebur128 implementation of EBU R128 / ITU-R BS.1770-4. This is the
+    same underlying measurement Spotify, YouTube, Apple, Netflix, and
+    broadcast (EBU R128 / ATSC A/85) all use; what differs between them is
+    the *target* LUFS they normalize to (and, for Netflix, dialogue-gating
+    instead of the full-programme gating used here — see
+    PLATFORM_TARGETS / platform_delta_rows below)."""
     ffmpeg_path, _ = resolve_binaries()
     if not ffmpeg_path:
         return {}
@@ -315,16 +377,135 @@ def analyze_loudness(filepath, want_integrated, want_peak, timeout=600):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         text = result.stderr
     except subprocess.TimeoutExpired:
-        return {"lufs_integrated": None, "true_peak_db": None}
+        return {"lufs_integrated": None, "true_peak_db": None, "lra": None}
 
     out = {}
     if want_integrated:
         m = re.search(r"Integrated loudness:\s*\n\s*I:\s*(-?\d+\.?\d*)\s*LUFS", text)
         out["lufs_integrated"] = float(m.group(1)) if m else None
+        m = re.search(r"Loudness range:\s*\n\s*LRA:\s*(-?\d+\.?\d*)\s*LU", text)
+        out["lra"] = float(m.group(1)) if m else None
     if want_peak:
         m = re.search(r"True peak:\s*\n\s*Peak:\s*(-?\d+\.?\d*)\s*dBFS", text)
         out["true_peak_db"] = float(m.group(1)) if m else None
     return out
+
+
+# --------------------------------------------------------------------------
+# Platform loudness targets — all BS.1770-based measurements, they just
+# normalize to different reference LUFS values (and Netflix dialogue-gates
+# rather than measuring the full programme, which our ebur128 pass doesn't
+# replicate — flagged in the comparison row rather than silently assumed).
+# Sources: Spotify's own loudness docs (-14 LUFS / -1 dBTP via ITU 1770);
+# EBU R128 (-23 LUFS); ATSC A/85 (-24 LKFS, US broadcast); Netflix delivery
+# spec (-27 LKFS dialogue-gated, -2 dBTP ceiling); Apple Music Sound Check
+# (-16 LUFS); YouTube (~-14 LUFS).
+# --------------------------------------------------------------------------
+PLATFORM_TARGETS = {
+    "Spotify / YouTube / Amazon / Tidal": {"lufs": -14.0, "peak_dbtp": -1.0, "gated": "full-programme"},
+    "Apple Music (Sound Check)": {"lufs": -16.0, "peak_dbtp": -1.0, "gated": "full-programme"},
+    "EBU R128 (Broadcast EU)": {"lufs": -23.0, "peak_dbtp": -1.0, "gated": "full-programme"},
+    "ATSC A/85 (US Broadcast)": {"lufs": -24.0, "peak_dbtp": -2.0, "gated": "full-programme"},
+    "Netflix (delivery spec)": {"lufs": -27.0, "peak_dbtp": -2.0, "gated": "dialogue"},
+}
+
+
+def platform_delta_rows(info, target_key):
+    """Extra (label, value) rows comparing measured LUFS/peak against a
+    platform target. Only meaningful if lufs/true_peak were measured."""
+    rows = []
+    target = PLATFORM_TARGETS.get(target_key)
+    if not target:
+        return rows
+
+    lufs = info.get("lufs_integrated")
+    if lufs is not None:
+        delta = lufs - target["lufs"]
+        note = (
+            " (dialogue-gated target — this is a full-programme measurement, treat as approximate)"
+            if target["gated"] == "dialogue"
+            else ""
+        )
+        rows.append((f"Δ vs {target_key}", f"{delta:+.1f} LU  (target {target['lufs']:.0f} LUFS){note}"))
+
+    peak = info.get("true_peak_db")
+    if peak is not None:
+        over = peak - target["peak_dbtp"]
+        status = "OK" if over <= 0 else f"exceeds ceiling by {over:.1f} dB"
+        rows.append(
+            (f"True Peak vs {target_key}", f"{peak:.1f} dBTP  (limit {target['peak_dbtp']:.0f} dBTP — {status})")
+        )
+
+    return rows
+
+
+# --------------------------------------------------------------------------
+# TVC slate-beep detection — heuristic: a .mov encoded in an "Animation"/
+# QuickTime-family codec at ~22s or ~37s is assumed to be a TVC (TV
+# commercial) master with a sync slate beep in its head. We isolate the
+# first `window` seconds and measure true peak there specifically, since
+# that's where the beep — not the actual spot content — lives.
+#
+# codec_name is generic per-family (ProRes is always "prores" regardless
+# of Proxy/LT/422/HQ/4444/XQ — the profile lives in the separate `profile`
+# field, and the fourcc lives in `codec_tag_string`, e.g. apch/ap4h/ap4x —
+# never in codec_name). TVC_CODEC_WHITELIST matches on codec_name; use
+# TVC_PRORES_PROFILES below if you want to narrow it to specific ProRes
+# variants (e.g. only 422 HQ / 4444 masters) instead of any ProRes profile.
+# --------------------------------------------------------------------------
+TVC_CODEC_WHITELIST = {"qtrle", "prores", "rawvideo"}
+TVC_PRORES_PROFILES = None  # e.g. {"422 hq", "4444"} to narrow; None = any ProRes profile
+TVC_DURATIONS = (22.0, 37.0)
+TVC_DURATION_TOLERANCE = 1.5  # seconds
+TVC_SLATE_WINDOW = 7  # seconds from head to analyze
+
+
+def is_probable_tvc(info, filepath):
+    if not filepath.lower().endswith(".mov"):
+        return False
+    codec_name = (info.get("codec") or "").lower()
+    if codec_name not in TVC_CODEC_WHITELIST:
+        return False
+    if codec_name == "prores" and TVC_PRORES_PROFILES is not None:
+        profile = (info.get("codec_profile") or "").replace("ProRes ", "").lower()
+        if profile not in TVC_PRORES_PROFILES:
+            return False
+    duration = info.get("duration")
+    if duration is None:
+        return False
+    d = float(duration)
+    return any(abs(d - t) < TVC_DURATION_TOLERANCE for t in TVC_DURATIONS)
+
+
+def analyze_slate_beep(filepath, window=TVC_SLATE_WINDOW, timeout=120):
+    """True peak within just the first `window` seconds (the slate/beep
+    region), not the whole file. `-t` is placed before `-i` so ffmpeg
+    stops reading input early instead of decoding the full commercial."""
+    ffmpeg_path, _ = resolve_binaries()
+    if not ffmpeg_path:
+        return {}
+    cmd = [
+        ffmpeg_path,
+        "-nostats",
+        "-hide_banner",
+        "-t",
+        str(window),
+        "-i",
+        filepath,
+        "-filter:a",
+        "ebur128=peak=true",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        text = result.stderr
+    except subprocess.TimeoutExpired:
+        return {"true_peak_db": None}
+
+    m = re.search(r"True peak:\s*\n\s*Peak:\s*(-?\d+\.?\d*)\s*dBFS", text)
+    return {"true_peak_db": float(m.group(1)) if m else None}
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +514,12 @@ def analyze_loudness(filepath, want_integrated, want_peak, timeout=600):
 # --------------------------------------------------------------------------
 def info_rows(info, options):
     rows = [
-        ("Codec", info.get("codec", "N/A") + (f" ({info['codec_long']})" if info.get("codec_long") else "")),
+        (
+            "Codec",
+            info.get("codec", "N/A")
+            + (f" · {info['codec_profile']}" if info.get("codec_profile") else "")
+            + (f" ({info['codec_long']})" if info.get("codec_long") else ""),
+        ),
         ("Dimensions", f"{info['width']}x{info['height']}" if info.get("width") else "N/A"),
         ("FPS", f"{info['fps']:.2f}" if info.get("fps") else "N/A"),
         ("Bitrate", human_bitrate(info.get("bitrate"))),
@@ -368,10 +554,24 @@ def info_rows(info, options):
     if options.get("lufs"):
         v = info.get("lufs_integrated")
         rows.append(("Integrated Loudness", f"{v:.1f} LUFS" if v is not None else "N/A (no audio track)"))
+        lra = info.get("lra")
+        if lra is not None:
+            rows.append(("Loudness Range (LRA)", f"{lra:.1f} LU"))
 
     if options.get("true_peak"):
         v = info.get("true_peak_db")
         rows.append(("True Peak", f"{v:.1f} dBTP" if v is not None else "N/A (no audio track)"))
+
+    platform_target = options.get("platform_target")
+    if platform_target and platform_target != "None":
+        rows.extend(platform_delta_rows(info, platform_target))
+
+    if options.get("tvc_slate"):
+        if info.get("is_tvc_candidate"):
+            v = info.get("slate_beep_peak_db")
+            rows.append(("Slate Beep Peak (first 7s)", f"{v:.1f} dBTP" if v is not None else "N/A"))
+        else:
+            rows.append(("Slate Beep Peak", "N/A (not a 22s/37s .mov match)"))
 
     return rows
 
