@@ -27,6 +27,7 @@ def safe_copy_metadata(package_name):
 docx_datas, docx_binaries, docx_hiddenimports = collect_all("docx")
 datas = [
     ("build_count.json", "."),
+    ("release_config.json", "."),
     ("assets/themes/Marcel.json", "assets/themes"),
     ("assets/icons/mac/icon.png", "assets/icons/mac"),
 ]
@@ -34,7 +35,7 @@ binaries = []
 
 datas += docx_datas
 
-# Include python-docx package data (templates) used by paddlex save_to_word
+# Include python-docx package data (templates) used for the "Save As DOCX" export
 binaries += docx_binaries
 hiddenimports = docx_hiddenimports
 datas += safe_copy_metadata("pillow")
@@ -44,6 +45,10 @@ datas += safe_copy_metadata("scipy")
 datas += safe_copy_metadata("python-docx")
 
 datas += collect_data_files("certifi")
+datas += collect_data_files("customtkinter")
+datas += collect_data_files("tkinterdnd2")
+hiddenimports += collect_submodules("static_ffmpeg")
+datas += safe_copy_metadata("static_ffmpeg")
 
 a = Analysis(  # type: ignore
     ["mainGUI.py"],
