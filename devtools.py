@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-devtools.py — N8's Eagle Eye build tool
+devtools.py — N8's Media Sniffer build tool
 ----------------------------------------
 Usage:
     python devtools.py          # build with auto-incremented count
@@ -169,7 +169,7 @@ def run_pyinstaller(build_label: str) -> int:
 
 def post_build_summary(build_label: str, count: int, success: bool):
     print("\n" + "─" * 60)
-    app_path = DIST_DIR / "N8's Eagle Eye.app"
+    app_path = DIST_DIR / "N8's Media Sniffer.app"
 
     if success:
         size_mb = (
@@ -316,7 +316,7 @@ def sign_app(app_path: Path):
 
 
 #  BUILD DMG
-def build_dmg(app_name="N8's Eagle Eye"):
+def build_dmg(app_name="N8's Media Sniffer"):
     """
     Build DMG by calling dmgbuild's Python API directly.
 
@@ -333,7 +333,7 @@ def build_dmg(app_name="N8's Eagle Eye"):
 
     app_src = (DIST_DIR / f"{app_name}.app").resolve()
     dmg_out = (DIST_DIR / f"{app_name}.dmg").resolve()
-    FINAL_DMG = "N8_EAGLE_EYE_ALPHA"
+    FINAL_DMG = "N8_MEDIA_SNIFFER"
 
     if dmg_out.exists():
         dmg_out.unlink()
@@ -394,7 +394,7 @@ def build_dmg(app_name="N8's Eagle Eye"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Eagle Eye build tool")
+    parser = argparse.ArgumentParser(description="Media Sniffer build tool")
     parser.add_argument("--dry", action="store_true", help="Preview version, skip build")
     parser.add_argument("--reset", action="store_true", help="Reset build counter to 0")
     parser.add_argument("--count", type=int, help="Override build count (doesn't save)")
@@ -446,14 +446,14 @@ def main():
     # Write the full record now — GUI can read this even from inside the app
     save_build_info(count, base_version, label, now)
 
-    print(f"\n  N8's Eagle Eye — {label}")
+    print(f"\n  N8's Media Sniffer — {label}")
     print("─" * 60)
 
     returncode = run_pyinstaller(label)
     post_build_summary(label, count, success=(returncode == 0))
 
     if returncode == 0:
-        app_path = DIST_DIR / "N8's Eagle Eye.app"
+        app_path = DIST_DIR / "N8's Media Sniffer.app"
         fix_ssl_dylib_conflict(app_path)
         sign_app(app_path)
 
