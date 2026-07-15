@@ -33,7 +33,6 @@ if mac:
     from __version__ import __versionMac__ as __version__
 
 # TEMP AND LOG PATHS
-import tempfile
 from __version__ import __appname__, __internal_app_name__
 
 if getattr(sys, "frozen", False):
@@ -42,42 +41,21 @@ if getattr(sys, "frozen", False):
     os.environ["SSL_CERT_FILE"] = certifi.where()
     os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
-    int_app_name = __internal_app_name__
 
-    log_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Logs")
-    config_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Config")
-    temp_dir = os.path.join(tempfile.gettempdir(), __appname__)
-    paddlex_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/paddle/paddlex")
-
-    os.makedirs(paddlex_dir, exist_ok=True)
-else:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    temp_dir = os.path.join(base_dir, "temp")
-    log_dir = os.path.join(base_dir, "logs")
-    config_dir = os.path.join(base_dir, "config")
-
-os.makedirs(config_dir, exist_ok=True)
-os.makedirs(temp_dir, exist_ok=True)
-os.makedirs(log_dir, exist_ok=True)
-
-
-# Only print debug info in main process, not in spawned workers
 def print_debug_info():
-    _is_worker = os.environ.get("OCR_WORKER_PROCESS") == "1"
 
-    if not _is_worker:
-        if is_running_from_bundle():
-            print("Running from a bundled application (.app/.exe)")
-        else:
-            print("Running from source (.py)")
+    if is_running_from_bundle():
+        print("Running from a bundled application (.app/.exe)")
+    else:
+        print("Running from source (.py)")
 
-        print("Current app version:", __version__)
-        print(get_build_label())
+    print("Current app version:", __version__)
+    print(get_build_label())
 
-        print("Current working directory:", os.getcwd())
-        print("Executable path:", sys.executable)
-        print("TclVersion: ", tk.TclVersion)
-        print("TkVersion: ", tk.TkVersion)
+    print("Current working directory:", os.getcwd())
+    print("Executable path:", sys.executable)
+    print("TclVersion: ", tk.TclVersion)
+    print("TkVersion: ", tk.TkVersion)
 
 
 # Handle bundle paths for binaries and icon
