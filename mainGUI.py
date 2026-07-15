@@ -16,7 +16,6 @@ Notes:
   folder buttons still work fine.
 """
 
-from curses import window
 import os
 import re
 import sys
