@@ -26,6 +26,8 @@ import tkinter as tk
 from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox
 
+import time
+
 import customtkinter as ctk
 
 import modules.media_core as core
@@ -67,6 +69,8 @@ error_color = ("#a52a2a", "#e05555")
 rows_color = ("#228b22", "#50fa7b")
 filename_color = ("#c71585", "#ff79c6")
 text_color = ("gray30", "gray70")
+dnd_text_color = ("#ede5da", "#1e1e1e")
+dnd_color = ("#1e1e1e", "#ede5da")
 
 # --------------------------------------------------------------------------
 # Optional drag-and-drop support. This is the "hybrid CTk + TkinterDnD"
@@ -324,11 +328,13 @@ class ResultsWindow(ctk.CTkToplevel):
 # Main application window
 # --------------------------------------------------------------------------
 class App(AppBaseClass):  # type: ignore
+
     def __init__(self):
         super().__init__()
+        self.withdraw()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        width = 520
+        width = 540
         height = 680
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
@@ -342,6 +348,7 @@ class App(AppBaseClass):  # type: ignore
 
         self._build_ui()
         self._check_binaries()
+        self.after(0, self.deiconify)
 
     # ---- UI construction -------------------------------------------------
     def _build_ui(self):
@@ -374,13 +381,15 @@ class App(AppBaseClass):  # type: ignore
 
         # --- Drop zone ---
         self.drop_zone = ctk.CTkFrame(
-            self, height=110, corner_radius=10, border_width=2, border_color="gray40", fg_color="#1e1e1e"
+            self, height=110, corner_radius=10, border_width=2, border_color="gray40", fg_color=dnd_color
         )
         self.drop_zone.pack(fill="x", padx=20, pady=(0, 10))
         self.drop_zone.pack_propagate(False)
 
         drop_text = "⬇  Drag & drop a file or folder here" if DND_AVAILABLE else "Drag & drop unavailable"
-        self.drop_label = ctk.CTkLabel(self.drop_zone, text=drop_text, text_color="#ede5da", bg_color="transparent")
+        self.drop_label = ctk.CTkLabel(
+            self.drop_zone, text=drop_text, text_color=dnd_text_color, bg_color="transparent"
+        )
         self.drop_label.pack(expand=True)
 
         if DND_AVAILABLE:
@@ -417,7 +426,7 @@ class App(AppBaseClass):  # type: ignore
             var = tk.BooleanVar(value=default)
             self.check_vars[key] = var
             cb = ctk.CTkCheckBox(checks_frame, text=label, variable=var)
-            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 10), pady=4)
+            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(10, 10), pady=4)
 
         target_row = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
         target_row.pack(fill="x", padx=20, pady=(8, 0))
