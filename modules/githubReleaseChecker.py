@@ -97,7 +97,7 @@ def CheckUpdates(root):
     print("\n\n")
 
     geo_width = 300
-    geo_len = 220
+    geo_len = 270
     updatemenu = create_popup(root, "Checking for Updates...", geo_width, geo_len, 0)
     make_non_resizable(updatemenu)
 
