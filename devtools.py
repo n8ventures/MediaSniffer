@@ -19,6 +19,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from modules.platformModules import mac, win
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 SPEC_FILE = "N8MediaSniffer.spec"
@@ -26,6 +28,8 @@ VERSION_FILE = Path("__version__.py")
 BUILD_FILE = Path("build_count.json")  # readable by the GUI too
 DIST_DIR = Path("dist")
 ROOT_DIR = Path(".")
+APP = "N8's Media Sniffer"
+EXT = ".app" if mac else ".exe"
 
 # Signing — switch to "Developer ID Application: ..." when notarizing
 SIGNING_IDENTITY = "Apple Development: n8ventures@gmail.com (28N6MRL39U)"
@@ -46,12 +50,17 @@ RESIGN_DYLIBS = [
 
 # ── Build Icons ───────────────────────────────────────────────────────────────────
 def build_icons():
-    from tools.icnsBuilder import pngtoico
+    from tools.icnsBuilder import pngtoicns, pngtoico
 
-    ICONS_DIR = "./assets/icons/mac/"
-    pngtoico(f"{ICONS_DIR}icon.png", ICONS_DIR)
-    pngtoico(f"{ICONS_DIR}icoDMG.png", ICONS_DIR)
-    print("  ✓ Icons built using tools/icnsBuilder.py")
+    if mac:
+        ICONS_DIR = "./assets/icons/mac/"
+        pngtoicns(f"{ICONS_DIR}icon.png", ICONS_DIR)
+        pngtoicns(f"{ICONS_DIR}icoDMG.png", ICONS_DIR)
+        print("  ✓ Mac Icons built using tools/icnsBuilder.py")
+    if win:
+        ICONS_DIR = "./assets/icons/win/"
+        pngtoico(f"{ICONS_DIR}icon.png", ICONS_DIR)
+        print("  ✓ Windows Icons built using tools/icnsBuilder.py")
 
 
 # ── Build JSON ────────────────────────────────────────────────────────────────
@@ -115,8 +124,9 @@ def make_build_label(base_version: str, count: int, now: datetime) -> str:
 
 
 def update_changelog():
-    subprocess.run(["git-cliff", "-o", "CHANGELOG.md"])
-    print("  ✓ CHANGELOG.md updated using git-cliff")
+    if mac:
+        subprocess.run(["git-cliff", "-o", "CHANGELOG.md"])
+        print("  ✓ CHANGELOG.md updated using git-cliff")
 
 
 # ── Pre-build checks ──────────────────────────────────────────────────────────
@@ -169,7 +179,7 @@ def run_pyinstaller(build_label: str) -> int:
 
 def post_build_summary(build_label: str, count: int, success: bool):
     print("\n" + "─" * 60)
-    app_path = DIST_DIR / "N8's Media Sniffer.app"
+    app_path = DIST_DIR / f"{APP}{EXT}"
 
     if success:
         size_mb = (
@@ -453,13 +463,15 @@ def main():
     post_build_summary(label, count, success=(returncode == 0))
 
     if returncode == 0:
-        app_path = DIST_DIR / "N8's Media Sniffer.app"
-        fix_ssl_dylib_conflict(app_path)
-        sign_app(app_path)
+        app_path = DIST_DIR / f"{APP}{EXT}"
 
-        print("─" * 60)
-        print(f"\n  BUILDING DMG  — {label}")
-        build_dmg()
+        if mac:
+            fix_ssl_dylib_conflict(app_path)
+            sign_app(app_path)
+
+            print("─" * 60)
+            print(f"\n  BUILDING DMG  — {label}")
+            build_dmg()
 
     sys.exit(returncode)
 

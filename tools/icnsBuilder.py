@@ -1,9 +1,10 @@
 import shutil
 import subprocess
 import os
+from PIL import Image
 
 
-def pngtoico(png, output_dir="./assets/icons/mac/"):
+def pngtoicns(png, output_dir="./assets/icons/mac/"):
     # Prepare paths
     iconset = f"{os.path.splitext(os.path.split(png)[1])[0]}.iconset"
 
@@ -34,6 +35,38 @@ def pngtoico(png, output_dir="./assets/icons/mac/"):
     shutil.rmtree(iconset_dir)
 
 
+def pngtoico(png, output_dir="./assets/icons/win/"):
+    if shutil.which("magick") is None:
+        print("Install ImageMagick please: https://imagemagick.org/script/download.php")
+        return
+
+    def resize_image(image_path, output_path, size):
+        with Image.open(image_path) as img:
+            resized_img = img.resize(size)
+            resized_img.save(output_path)
+
+    image = png
+    sizes = [(16, 16), (32, 32), (48, 48), (128, 128), (256, 256)]
+
+    resize_folder = "resize"
+    os.makedirs(resize_folder, exist_ok=True)
+
+    for size in sizes:
+        output_path = os.path.join(resize_folder, f"resized_{size[0]}x{size[1]}.png")
+        resize_image(image, output_path, size)
+
+    resized_images = [os.path.join(resize_folder, f"resized_{size[0]}x{size[1]}.png") for size in sizes]
+    print(resized_images)
+
+    cmd = (
+        ["magick"]
+        + resized_images
+        + ["-type", "TrueColorAlpha", f"{output_dir}{os.path.splitext(os.path.basename(png))[0]}.ico"]
+    )
+    subprocess.run(cmd, check=True)
+    shutil.rmtree("resize")
+
+
 if __name__ == "__main__":
-    pngtoico("./assets/icons/mac/icon.png")
-    pngtoico("./assets/icons/mac/icoDMG.png")
+    pngtoicns("./assets/icons/mac/icon.png")
+    pngtoicns("./assets/icons/mac/icoDMG.png")

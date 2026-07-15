@@ -120,9 +120,9 @@ if any(char.isalpha() for char in __version__) or __version__.startswith("0."):
 else:
     if win:
         icon = (
-            os.path.join(bundle_path, "assets", "icons", "win", "ico.ico")
+            os.path.join(bundle_path, "assets", "icons", "win", "icon.ico")
             if bundle_path
-            else "assets/icons/win/ico.ico"
+            else "assets/icons/win/icon.ico"
         )
     elif mac:
         icon = icon_png
