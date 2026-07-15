@@ -27,9 +27,10 @@ def safe_copy_metadata(package_name):
 docx_datas, docx_binaries, docx_hiddenimports = collect_all("docx")
 datas = [
     ("build_count.json", "."),
-    ("release_config.json", "."),
+    # ("release_config.json", "."),
     ("assets/themes/Marcel.json", "assets/themes"),
     ("assets/icons/mac/icon.png", "assets/icons/mac"),
+    ("assets/icons/mac/icon.icns", "assets/icons/mac"),
 ]
 binaries = []
 
@@ -47,8 +48,16 @@ datas += safe_copy_metadata("python-docx")
 datas += collect_data_files("certifi")
 datas += collect_data_files("customtkinter")
 datas += collect_data_files("tkinterdnd2")
-hiddenimports += collect_submodules("static_ffmpeg")
-datas += safe_copy_metadata("static_ffmpeg")
+
+# ffmpeg/ffprobe — fetched once at build time (ffmpeg.martin-riedl.de, arm64)
+# into bin/Silicon/, bundled here as `binaries` rather than `datas` so
+# PyInstaller preserves the executable bit and treats them as Mach-O
+# binaries (picked up by your codesigning step in devtools.py, same as any
+# other binary in the bundle). No more static_ffmpeg / runtime download.
+binaries += [
+    ("bin/Silicon/ffmpeg", "bin/Silicon"),
+    ("bin/Silicon/ffprobe", "bin/Silicon"),
+]
 
 a = Analysis(  # type: ignore
     ["mainGUI.py"],

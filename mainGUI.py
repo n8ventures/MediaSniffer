@@ -1,16 +1,16 @@
 """
 mainGUI.py — CustomTkinter GUI for the GIF/video media scanner.
 
-    pip install customtkinter tkinterdnd2 static-ffmpeg python-docx
+    pip install customtkinter tkinterdnd2 python-docx
 
 Run:
     python mainGUI.py
 
 Notes:
-- static-ffmpeg is optional but recommended: it downloads & caches a
-  self-contained ffmpeg/ffprobe pair on first run, so you don't depend on
-  the user having ffmpeg on PATH — good for packaging with PyInstaller etc.
-  Without it, the app falls back to ffmpeg/ffprobe on PATH.
+- ffmpeg/ffprobe are bundled at build time under bin/Silicon (macOS arm64)
+  or bin/Win64 (Windows x64) — see media_core.resolve_binaries(). Running
+  from source on an unsupported platform (Intel Mac, Linux) or without the
+  bin/ folder falls back to ffmpeg/ffprobe on PATH.
 - python-docx is only needed if you use the "Save As" DOCX export.
 - tkinterdnd2 is optional; without it the drop zone is disabled but file/
   folder buttons still work fine.
@@ -29,12 +29,15 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 import modules.media_core as core
-from modules.platformModules import win, mac, icon, icon_png
+from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_running_from_bundle
 from modules.tkModules import watermark_label
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
 
 ctk.set_appearance_mode("System")
-ctk.set_default_color_theme("assets/themes/Marcel.json")
+theme_path = (
+    os.path.join(bundle_path, "assets", "themes", "Marcel.json") if bundle_path else "./assets/themes/Marcel.json"
+)
+ctk.set_default_color_theme(theme_path)
 
 
 def set_icon(root):
@@ -483,7 +486,7 @@ class App(AppBaseClass):  # type: ignore
     def _check_binaries(self):
         if not core.binaries_available():
             self.status_label.configure(
-                text="⚠ ffmpeg/ffprobe not found. Install ffmpeg, or `pip install static-ffmpeg`.",
+                text="⚠ ffmpeg/ffprobe not found.",
                 text_color="#e0a020",
             )
 
@@ -539,7 +542,7 @@ class App(AppBaseClass):  # type: ignore
 
     def _start_scan(self):
         if not core.binaries_available():
-            messagebox.showerror("ffmpeg/ffprobe not found", "Install ffmpeg, or run: pip install static-ffmpeg")
+            messagebox.showerror("ffmpeg/ffprobe not found", "This build is missing ffmpeg/ffprobe. Please reinstall.")
             return
 
         grouped = self._gather_files()

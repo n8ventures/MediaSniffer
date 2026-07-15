@@ -43,13 +43,49 @@ def is_media_file(filename):
 
 
 # --------------------------------------------------------------------------
-# Binary resolution — prefers static-ffmpeg's bundled, self-contained
-# binaries (great for packaging with PyInstaller/etc. — no dependency on
-# the user having ffmpeg on PATH). Falls back to system PATH if the
-# `static-ffmpeg` package isn't installed or the download/cache fails.
+# Binary resolution — ffmpeg/ffprobe are fetched once at *build* time (see
+# devtools/fetch_ffmpeg.py or however you're pulling them) into:
+#   bin/Silicon/   macOS arm64  — from ffmpeg.martin-riedl.de
+#   bin/Win64/     Windows x64  — from gyan.dev
+# and bundled straight into the app by the .spec, so there's no runtime
+# download and no static_ffmpeg dependency. Only macOS Apple Silicon and
+# Windows x64 are covered by a bundled copy right now — Intel Mac and Linux
+# fall back to whatever's on PATH.
 # --------------------------------------------------------------------------
+from modules.platformModules import win, mac, bundle_path
+
 _FFMPEG_PATH = None
 _FFPROBE_PATH = None
+
+
+def set_binaries(ffmpeg_path, ffprobe_path):
+    """Explicitly set the resolved ffmpeg/ffprobe paths, bypassing the
+    lookup below entirely on every future resolve_binaries() call."""
+    global _FFMPEG_PATH, _FFPROBE_PATH
+    _FFMPEG_PATH, _FFPROBE_PATH = ffmpeg_path, ffprobe_path
+
+
+def _bundled_bin_candidates():
+    """Candidate roots to search for bin/<Silicon|Win64>/, covering both
+    running from source (project root) and the built app. PyInstaller's
+    macOS BUNDLE step doesn't always place non-.dylib binaries in the same
+    spot as `datas` (Resources vs. Frameworks depending on version/how
+    they're declared in the .spec) — check a couple of likely roots rather
+    than assuming one. Verify with `find *.app -name ffmpeg` after a build
+    and trim this list down once you know where yours actually lands.
+    """
+    folder = "Win64" if win else "Silicon" if mac else None
+    if not folder:
+        return []
+
+    roots = []
+    if bundle_path:
+        roots.append(bundle_path)  # Contents/Resources on macOS
+        roots.append(os.path.join(os.path.dirname(bundle_path), "Frameworks"))
+        roots.append(os.path.dirname(sys.executable))
+    else:
+        roots.append(".")  # running from source, project root
+    return [os.path.join(root, "bin", folder) for root in roots]
 
 
 def resolve_binaries():
@@ -58,14 +94,17 @@ def resolve_binaries():
     if _FFMPEG_PATH and _FFPROBE_PATH:
         return _FFMPEG_PATH, _FFPROBE_PATH
 
-    try:
-        import static_ffmpeg
-
-        ffmpeg_path, ffprobe_path = static_ffmpeg.run.get_or_fetch_platform_executables_else_raise()
-        _FFMPEG_PATH, _FFPROBE_PATH = ffmpeg_path, ffprobe_path
-        return _FFMPEG_PATH, _FFPROBE_PATH
-    except Exception:
-        pass  # package missing, no network, unsupported platform, etc.
+    ext = ".exe" if win else ""
+    for bin_dir in _bundled_bin_candidates():
+        ffmpeg_path = os.path.join(bin_dir, f"ffmpeg{ext}")
+        ffprobe_path = os.path.join(bin_dir, f"ffprobe{ext}")
+        if os.path.isfile(ffmpeg_path) and os.path.isfile(ffprobe_path):
+            if not win:
+                for exe in (ffmpeg_path, ffprobe_path):
+                    if not os.access(exe, os.X_OK):
+                        os.chmod(exe, os.stat(exe).st_mode | 0o111)
+            _FFMPEG_PATH, _FFPROBE_PATH = ffmpeg_path, ffprobe_path
+            return _FFMPEG_PATH, _FFPROBE_PATH
 
     ffmpeg_path = shutil.which("ffmpeg")
     ffprobe_path = shutil.which("ffprobe")
