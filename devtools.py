@@ -376,7 +376,7 @@ def build_dmg(app_name="N8's Media Sniffer"):
                         "fileicon",
                         "set",
                         str(pre_existing_final_dmg),
-                        "assets/icons/mac/icoDev-DMG.icns",
+                        "assets/icons/mac/icoDMG.icns",
                     ],
                     check=True,
                 )
