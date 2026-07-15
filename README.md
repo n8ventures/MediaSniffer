@@ -8,15 +8,9 @@ Two files:
 ## Setup
 
 ```
-pip install customtkinter tkinterdnd2 static-ffmpeg python-docx
-python mainGUI.py
+pip install r requirements.txt
 ```
 
-- **static-ffmpeg** is optional but recommended for packaging: it downloads
-  and caches a self-contained `ffmpeg`/`ffprobe` pair per platform on first
-  run, so a packaged app doesn't depend on the end user having ffmpeg on
-  PATH. If it's not installed, `media_core.resolve_binaries()` falls back
-  to `ffmpeg`/`ffprobe` on PATH automatically.
 - **tkinterdnd2** is optional — without it, drag-and-drop is disabled and
   the drop zone shows a note, but the folder/file buttons work fine. Swap
   in your own patched hybrid class in `mainGUI.py` — the `_CTkDnD` block
