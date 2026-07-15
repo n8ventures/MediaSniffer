@@ -611,6 +611,11 @@ def main():
     app = App()
     set_icon(app)
     watermark_label(app, __version__)
+
+    from modules.githubReleaseChecker import autoChecker
+
+    autoChecker(app)
+
     app.mainloop()
 
 
