@@ -499,6 +499,12 @@ def main():
 
     print(f"\n  N8's Media Sniffer — {label}")
     print("─" * 60)
+    if win:
+        from tools.generateRC import genMainRC
+        from __version__ import __version__
+
+        genMainRC(__version__, APP)
+        print(f"  ✓ .rc built!")
 
     returncode = run_pyinstaller(label)
     post_build_summary(label, count, success=(returncode == 0))
