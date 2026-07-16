@@ -186,9 +186,12 @@ def post_build_summary(build_label: str, count: int, success: bool):
     app_path = DIST_DIR / f"{APP}{EXT}"
 
     if success:
-        size_mb = (
-            sum(f.stat().st_size for f in app_path.rglob("*") if f.is_file()) / 1_048_576 if app_path.exists() else 0
-        )
+        if app_path.is_dir():
+            size_mb = sum(f.stat().st_size for f in app_path.rglob("*") if f.is_file()) / 1_048_576
+        elif app_path.is_file():
+            size_mb = app_path.stat().st_size / 1_048_576
+        else:
+            size_mb = 0
 
         print(f"  ✓ Build complete")
         print(f"    Label   : {build_label}")
