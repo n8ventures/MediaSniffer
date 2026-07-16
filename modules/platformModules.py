@@ -100,9 +100,18 @@ def get_build_label():
             return f"Source Version. (Builds: {build_count})"
 
 
-icon_png = (
-    os.path.join(bundle_path, "assets", "icons", "mac", "icon.png") if bundle_path else "./assets/icons/mac/icon.png"
-)
+if mac:
+    icon_png = (
+        os.path.join(bundle_path, "assets", "icons", "mac", "icon.png")
+        if bundle_path
+        else "./assets/icons/mac/icon.png"
+    )
+if win:
+    icon_png = (
+        os.path.join(bundle_path, "assets", "icons", "win", "icon.png")
+        if bundle_path
+        else "./assets/icons/win/icon.png"
+    )
 
 if any(char.isalpha() for char in __version__) or __version__.startswith("0."):
     if win:
@@ -125,4 +134,8 @@ else:
             else "assets/icons/win/icon.ico"
         )
     elif mac:
-        icon = icon_png
+        icon = (
+            os.path.join(bundle_path, "assets", "icons", "mac", "icon.png")
+            if bundle_path
+            else "./assets/icons/mac/icon.png"
+        )
