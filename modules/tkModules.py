@@ -130,14 +130,22 @@ def emoji_img(text, size=13):
     )
 
 
-# green = emoji_img("🟢")
-# yellow = emoji_img("🟡")
-# orange = emoji_img("🟠")
-# red = emoji_img("🔴")
-# warning = emoji_img("⚠️")
-# check = emoji_img("✅")
-# fail = emoji_img("❌")
-# white = emoji_img("⚪")
-# triangle = emoji_img("🔺")
-# bug = emoji_img("🐛")
-# save = emoji_img("💾")
+def apply_emoji(widget, emoji_char, text="", px=13, compound="left"):
+    """
+    Makes an emoji render correctly on both platforms:
+    - macOS: Tk's font fallback already renders color emoji fine, so the
+      emoji just goes straight into the widget's text.
+    - Windows: Tk won't render color emoji from a font at all, so we
+      render it to an image via emoji_img() and set it as `image=`,
+      with `text=` holding just the label text.
+    The image ref is stashed on the widget itself (widget.image = ...) —
+    same pattern you're already using for the title icon at line 373 —
+    so Tk doesn't garbage-collect it once this function returns.
+    """
+    if mac:
+        widget.configure(text=f"{emoji_char} {text}".strip())
+        return
+
+    img = emoji_img(emoji_char, size=px)
+    widget.configure(text=text, image=img, compound=compound)
+    widget.image = img
