@@ -31,7 +31,7 @@ import customtkinter as ctk
 
 import modules.media_core as core
 from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_running_from_bundle
-from modules.tkModules import watermark_label
+from modules.tkModules import watermark_label, apply_emoji
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
 
 ctk.set_appearance_mode("System")
@@ -227,9 +227,16 @@ class ResultsWindow(ctk.CTkToplevel):
 
         header = ctk.CTkLabel(
             self,
-            text=f"🔍 {total_files} file(s) scanned  ·  {core.human_size(total_size)}"
-            + (f"  ·  {error_files} error(s)" if error_files else ""),
+            text="",
             font=("", 15, "bold"),
+        )
+
+        apply_emoji(
+            header,
+            "🔍",
+            f"{total_files} file(s) scanned  ·  {core.human_size(total_size)}"
+            + (f"  ·  {error_files} error(s)" if error_files else ""),
+            15,
         )
         header.pack(pady=(12, 4), padx=16, anchor="w")
 
@@ -249,7 +256,8 @@ class ResultsWindow(ctk.CTkToplevel):
         )
         format_menu.pack(side="left")
 
-        save_btn = ctk.CTkButton(bottom, text="💾 Save As…", command=self._on_save, width=120)
+        save_btn = ctk.CTkButton(bottom, text="", command=self._on_save, width=120)
+        apply_emoji(save_btn, "💾", "Save As…")
         save_btn.pack(side="left", padx=8)
 
         exit_btn = ctk.CTkButton(
@@ -262,10 +270,11 @@ class ResultsWindow(ctk.CTkToplevel):
             count = len(entry["files"])
             dir_label = ctk.CTkLabel(
                 self.scroll,
-                text=f"📁 {entry['dir']}  ({count} file{'s' if count != 1 else ''})",
+                text="",
                 font=("", 14, "bold"),
                 text_color=dir_color,
             )
+            apply_emoji(dir_label, "📁", f" {entry['dir']}  ({count} file{'s' if count != 1 else ''})", 14)
             dir_label.pack(fill="x", pady=(10, 2), anchor="w")
 
             for filename, info in entry["files"]:
@@ -273,11 +282,13 @@ class ResultsWindow(ctk.CTkToplevel):
                 card.pack(fill="x", pady=4)
 
                 icon = "🎬" if info.get("kind") == "video" else "🖼️"
-                title = ctk.CTkLabel(card, text=f"{icon} {filename}", font=("", 13, "bold"), text_color=filename_color)
+                title = ctk.CTkLabel(card, text="", font=("", 13, "bold"), text_color=filename_color)
+                apply_emoji(title, icon, f" {filename}", 13)
                 title.pack(anchor="w", padx=12, pady=(8, 2))
 
                 if "error" in info:
-                    err = ctk.CTkLabel(card, text=f"⚠ {info['error']}", text_color=error_color)
+                    err = ctk.CTkLabel(card, text=f"", text_color=error_color)
+                    apply_emoji(widget=err, emoji_char="⚠️", text=f" {info['error']}")
                     err.pack(anchor="w", padx=12, pady=(0, 8))
                     continue
 
@@ -347,7 +358,7 @@ class App(AppBaseClass):  # type: ignore
 
         self._build_ui()
         self._check_binaries()
-        self.after(0, self.deiconify)
+        self.after(100, self.deiconify)
 
     # ---- UI construction -------------------------------------------------
     def _build_ui(self):
@@ -360,13 +371,14 @@ class App(AppBaseClass):  # type: ignore
         # rest of the app already looks like.
         self.theme_toggle_btn = ctk.CTkButton(
             self,
-            text="☀️" if ctk.get_appearance_mode() == "Dark" else "🌑",
+            text="",
             width=32,
             height=32,
             corner_radius=6,
             font=("", 15),
             command=self._toggle_appearance,
         )
+        apply_emoji(self.theme_toggle_btn, emoji_char="☀️" if ctk.get_appearance_mode() == "Dark" else "🌑", px=15)
         self.theme_toggle_btn.place(relx=1.0, x=-14, y=14, anchor="ne")
 
         title = ctk.CTkLabel(self, text=f"{__appname__}", image=icon_ctkImage, compound="left", font=("", 20, "bold"))
@@ -385,10 +397,13 @@ class App(AppBaseClass):  # type: ignore
         self.drop_zone.pack(fill="x", padx=20, pady=(0, 10))
         self.drop_zone.pack_propagate(False)
 
-        drop_text = "⬇  Drag & drop a file or folder here" if DND_AVAILABLE else "Drag & drop unavailable"
-        self.drop_label = ctk.CTkLabel(
-            self.drop_zone, text=drop_text, text_color=dnd_text_color, bg_color="transparent"
-        )
+        self.drop_label = ctk.CTkLabel(self.drop_zone, text="", text_color=dnd_text_color, bg_color="transparent")
+
+        if DND_AVAILABLE:
+            apply_emoji(widget=self.drop_label, emoji_char="⬇", text=" Drag & drop a file or folder here", px=13)
+        else:
+            apply_emoji(widget=self.drop_label, emoji_char="⚠️", text=" Drag & drop unavailable", px=13)
+
         self.drop_label.pack(expand=True)
 
         if DND_AVAILABLE:
@@ -397,12 +412,14 @@ class App(AppBaseClass):  # type: ignore
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
         btn_row.pack(fill="x", padx=20, pady=(0, 6))
-        ctk.CTkButton(btn_row, text="📁 Select Folder", command=self._select_folder).pack(
-            side="left", expand=True, fill="x", padx=(0, 6)
-        )
-        ctk.CTkButton(btn_row, text="🎬 Select File(s)", command=self._select_files).pack(
-            side="left", expand=True, fill="x", padx=(6, 0)
-        )
+
+        select_folder_btn = ctk.CTkButton(btn_row, text="", command=self._select_folder)
+        apply_emoji(select_folder_btn, "📁", "Select Folder")
+        select_folder_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
+
+        select_file_btn = ctk.CTkButton(btn_row, text="", command=self._select_files)
+        apply_emoji(select_file_btn, "🎬", "Select File(s)")
+        select_file_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
         self.path_label = ctk.CTkLabel(self, text="No file or folder selected", text_color=text_color, wraplength=440)
         self.path_label.pack(pady=(4, 14), padx=20)
@@ -446,8 +463,9 @@ class App(AppBaseClass):  # type: ignore
         self.check_vars["lufs"].trace_add("write", self._on_lufs_toggle)
 
         self.start_btn = ctk.CTkButton(
-            self, text="▶  Start Scan", height=40, font=("", 14, "bold"), state="disabled", command=self._start_scan
+            self, text="", height=40, font=("", 14, "bold"), state="disabled", command=self._start_scan
         )
+        apply_emoji(widget=self.start_btn, emoji_char="▶", text=f"Start Scan", px=14)
         self.start_btn.pack(fill="x", padx=20, pady=(16, 6))
 
         self.status_label = ctk.CTkLabel(self, text="", text_color="gray55", font=("", 11))
@@ -483,7 +501,8 @@ class App(AppBaseClass):  # type: ignore
             pass
 
         ctk.set_appearance_mode(new_mode)
-        self.theme_toggle_btn.configure(text="☀️" if new_mode == "Dark" else "🌑")
+        self.theme_toggle_btn.configure(text="")
+        apply_emoji(self.theme_toggle_btn, emoji_char="☀️" if new_mode == "Dark" else "🌑", px=15)
         self.update_idletasks()  # force every widget to finish redrawing now, while hidden
 
         try:
@@ -494,9 +513,10 @@ class App(AppBaseClass):  # type: ignore
     def _check_binaries(self):
         if not core.binaries_available():
             self.status_label.configure(
-                text="⚠ ffmpeg/ffprobe not found.",
+                text="",
                 text_color="#e0a020",
             )
+            apply_emoji(widget=self.status_label, emoji_char="⚠️️", text="ffmpeg/ffprobe not found.")
 
     # ---- Path selection ----------------------------------------------------
     def _select_folder(self):
