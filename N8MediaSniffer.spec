@@ -92,6 +92,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)  # type: ignore
 exe = EXE(  # type: ignore
     pyz,
     a.scripts,
+    a.binaries if win else [],
+    a.datas if win else [],
     exclude_binaries=not win,
     name=f"{__appname__}",
     debug=False,
