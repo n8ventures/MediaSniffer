@@ -117,6 +117,13 @@ def binaries_available():
     return bool(ffmpeg_path and ffprobe_path)
 
 
+_SUBPROCESS_FLAGS = {"creationflags": subprocess.CREATE_NO_WINDOW} if win else {}
+
+
+def _run(cmd, **kwargs):
+    return subprocess.run(cmd, capture_output=True, text=True, **_SUBPROCESS_FLAGS, **kwargs)
+
+
 # --------------------------------------------------------------------------
 # Formatting helpers
 # --------------------------------------------------------------------------
@@ -272,7 +279,7 @@ def run_ffprobe(filepath):
         filepath,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = _run(cmd, timeout=30)
         if result.returncode != 0:
             return None, result.stderr.strip()
         return json.loads(result.stdout), None
@@ -413,7 +420,7 @@ def analyze_loudness(filepath, want_integrated, want_peak, timeout=600):
         "-",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = _run(cmd, timeout=timeout)
         text = result.stderr
     except subprocess.TimeoutExpired:
         return {"lufs_integrated": None, "true_peak_db": None, "lra": None}
@@ -538,7 +545,7 @@ def analyze_slate_beep(filepath, window=TVC_SLATE_WINDOW, timeout=120):
         "-",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = _run(cmd, timeout=timeout)
         text = result.stderr
     except subprocess.TimeoutExpired:
         return {"true_peak_db": None}
