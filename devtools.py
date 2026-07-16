@@ -31,6 +31,10 @@ ROOT_DIR = Path(".")
 APP = "N8's Media Sniffer"
 EXT = ".app" if mac else ".exe"
 
+FINAL_DMG_NAME = "N8_MEDIA_SNIFFER"
+FINAL_DMG_FILE = f"{FINAL_DMG_NAME}.dmg"
+pre_existing_final_dmg = ROOT_DIR / FINAL_DMG_FILE
+
 # Signing — switch to "Developer ID Application: ..." when notarizing
 SIGNING_IDENTITY = "Apple Development: n8ventures@gmail.com (28N6MRL39U)"
 ENTITLEMENTS_FILE = Path("entitlements.plist")
@@ -325,6 +329,47 @@ def sign_app(app_path: Path):
         print(f"     {result.stderr.strip()}")
 
 
+def notarize_and_staple(target_path: Path):
+    """
+    Submit a signed .app (zipped) or .dmg to Apple's notary service, wait
+    for the result, then staple the ticket so Gatekeeper works offline.
+    """
+    submit_path = target_path
+    if target_path.suffix == ".app":
+        submit_path = target_path.with_suffix(".zip")
+        subprocess.run(["ditto", "-c", "-k", "--keepParent", str(target_path), str(submit_path)])
+
+    print(f"\n  Submitting {submit_path.name} to Apple notary service...")
+    result = subprocess.run(
+        [
+            "xcrun",
+            "notarytool",
+            "submit",
+            str(submit_path),
+            "--keychain-profile",
+            "n8ventures-notary",  # see setup note below
+            "--wait",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    print(result.stdout)
+    if result.returncode != 0 or "status: Accepted" not in result.stdout:
+        print(f"  ✗ Notarization failed:\n{result.stderr}")
+        return False
+
+    print(f"  Stapling ticket to {target_path.name}...")
+    subprocess.run(["xcrun", "stapler", "staple", str(target_path)])
+    return True
+
+
+# Note: Run this command first
+# xcrun notarytool store-credentials "n8ventures-notary" \
+#   --apple-id "n8ventures@gmail.com" \
+#   --team-id "28N6MRL39U" \
+#   --password "<app-specific password from appleid.apple.com>"
+
+
 #  BUILD DMG
 def build_dmg(app_name="N8's Media Sniffer"):
     """
@@ -335,6 +380,7 @@ def build_dmg(app_name="N8's Media Sniffer"):
     management when detaching the temporary mount. Calling the API directly
     runs in the same process context and avoids this entirely.
     """
+
     try:
         import dmgbuild as _dmgbuild
     except ImportError:
@@ -343,7 +389,6 @@ def build_dmg(app_name="N8's Media Sniffer"):
 
     app_src = (DIST_DIR / f"{app_name}.app").resolve()
     dmg_out = (DIST_DIR / f"{app_name}.dmg").resolve()
-    FINAL_DMG = "N8_MEDIA_SNIFFER"
 
     if dmg_out.exists():
         dmg_out.unlink()
@@ -358,17 +403,13 @@ def build_dmg(app_name="N8's Media Sniffer"):
     )
     print(f"  ✓ DMG built: {dmg_out}")
 
-    final_dmg = f"{FINAL_DMG}.dmg"
-
     if dmg_out.exists():
-        dmg_out.rename(DIST_DIR / final_dmg)
+        dmg_out.rename(DIST_DIR / FINAL_DMG_FILE)
     else:
         print(f"  DMG not found after build: {dmg_out}")
         print("Obviously, dmgbuild still doesn't move it to the dist folder. Assuming it's in root...")
 
         root_dmg = ROOT_DIR / f"{app_name}.dmg"
-
-        pre_existing_final_dmg = ROOT_DIR / final_dmg
 
         if pre_existing_final_dmg.exists():
             print(f"  Found pre-existing DMG in root: {pre_existing_final_dmg}")
@@ -469,9 +510,47 @@ def main():
             fix_ssl_dylib_conflict(app_path)
             sign_app(app_path)
 
-            print("─" * 60)
-            print(f"\n  BUILDING DMG  — {label}")
+            if IS_DIST_BUILD:
+                notarize_and_staple(app_path)
+
             build_dmg()
+
+            version = read_base_version()
+            FINAL_DMG_FILE_name = f"{FINAL_DMG_NAME}-{version}"
+
+            import shutil
+            import zipfile
+
+            try:
+                print("  Checking if existing dmgs and zips are in Dist folder...")
+                dmg_in_dist = DIST_DIR / pre_existing_final_dmg
+                dmg_zip_in_dist = DIST_DIR / f"{FINAL_DMG_FILE_name}.zip"
+                dmg_in_dist.unlink(missing_ok=True)
+                dmg_zip_in_dist.unlink(missing_ok=True)
+            except Exception as e:
+                print(f"  ✗ Failed to delete dmgs: {e}")
+
+            try:
+                version = read_base_version()
+                zip_output = Path(f"{FINAL_DMG_FILE_name}.zip")
+                with zipfile.ZipFile(zip_output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    archive.write(pre_existing_final_dmg)
+
+                shutil.move(zip_output, DIST_DIR)
+                print("  Moved zipped DMG to dist Folder.")
+            except Exception as e:
+                print(f"  ✗ Failed to zip up DMG: {e}")
+
+            try:
+                shutil.move(pre_existing_final_dmg, DIST_DIR)
+                print("  Moved DMG to dist folder.")
+            except Exception as e:
+                print(f"  ✗ Failed to Move DMG to dist folder: {e}")
+
+            if IS_DIST_BUILD:
+                dmg_path = DIST_DIR / "N8_MEDIA_SNIFFER.dmg"
+                subprocess.run(["codesign", "--force", "--sign", SIGNING_IDENTITY, "--timestamp", str(dmg_path)])
+                notarize_and_staple(dmg_path)
 
     sys.exit(returncode)
 
