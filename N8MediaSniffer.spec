@@ -10,7 +10,7 @@ from PyInstaller.utils.hooks import (
     collect_dynamic_libs,
 )
 from importlib.metadata import PackageNotFoundError
-
+from modules.platformModules import mac, win
 from __version__ import __versionMac__ as __version__
 from __version__ import __author__, __appname__, __internal_app_name__
 
@@ -29,8 +29,6 @@ datas = [
     ("build_count.json", "."),
     # ("release_config.json", "."),
     ("assets/themes/Marcel.json", "assets/themes"),
-    ("assets/icons/mac/icon.png", "assets/icons/mac"),
-    ("assets/icons/mac/icon.icns", "assets/icons/mac"),
 ]
 binaries = []
 
@@ -54,10 +52,26 @@ datas += collect_data_files("tkinterdnd2")
 # PyInstaller preserves the executable bit and treats them as Mach-O
 # binaries (picked up by your codesigning step in devtools.py, same as any
 # other binary in the bundle). No more static_ffmpeg / runtime download.
-binaries += [
-    ("bin/Silicon/ffmpeg", "bin/Silicon"),
-    ("bin/Silicon/ffprobe", "bin/Silicon"),
-]
+if mac:
+    binaries += [
+        ("bin/Silicon/ffmpeg", "bin/Silicon"),
+        ("bin/Silicon/ffprobe", "bin/Silicon"),
+    ]
+    datas += [
+        ("assets/icons/mac/icon.icns", "assets/icons/mac"),
+        ("assets/icons/mac/icon.png", "assets/icons/mac"),
+    ]
+    icon = "assets/icons/mac/icon.icns"
+if win:
+    binaries += [
+        ("bin/Win64/ffmpeg.exe", "bin/Win64"),
+        ("bin/Win64/ffprobe.exe", "bin/Win64"),
+    ]
+    datas += [
+        ("assets/icons/win/icon.ico", "assets/icons/win"),
+        ("assets/icons/win/icon.png", "assets/icons/win"),
+    ]
+    icon = "assets/icons/win/icon.ico"
 
 a = Analysis(  # type: ignore
     ["mainGUI.py"],
@@ -78,7 +92,7 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)  # type: ignore
 exe = EXE(  # type: ignore
     pyz,
     a.scripts,
-    exclude_binaries=True,
+    exclude_binaries=not win,
     name=f"{__appname__}",
     debug=False,
     bootloader_ignore_signals=False,
@@ -91,33 +105,34 @@ exe = EXE(  # type: ignore
     target_arch=None,
     codesign_identity=None,  # signing handled post-build by devtools.py
     entitlements_file=None,  # avoids --timestamp failures with Apple Dev certs
-    icon="assets/icons/mac/icon.icns",
+    icon=icon,
+    version=None if mac else "main.rc",
 )
+if mac:
+    coll = COLLECT(  # type: ignore
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name=f"{__appname__}",
+    )
 
-coll = COLLECT(  # type: ignore
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name=f"{__appname__}",
-)
-
-app = BUNDLE(  # type: ignore
-    coll,
-    name=f"{__appname__}.app",
-    icon="assets/icons/mac/icon.icns",
-    bundle_identifier=f"{__internal_app_name__}",
-    version=os.environ.get("BUILD_VERSION", __version__),
-    info_plist={
-        "CFBundleDisplayName": f"{__appname__}",
-        "CFBundleShortVersionString": os.environ.get("BUILD_VERSION", __version__),
-        "NSHighResolutionCapable": True,
-        "NSRequiresAquaSystemAppearance": False,  # respects dark/light mode
-        "LSMinimumSystemVersion": "13.0",
-        # for when you add AppleScript later:
-        "NSAppleEventsUsageDescription": f"{__appname__} uses AppleScript to open Finder windows.",
-        "NSScreenCaptureUsageDescription": f"{__appname__} requires Screen Recording to capture screenshots for bug reports.",
-    },
-)
+    app = BUNDLE(  # type: ignore
+        coll,
+        name=f"{__appname__}.app",
+        icon=icon,
+        bundle_identifier=f"{__internal_app_name__}",
+        version=os.environ.get("BUILD_VERSION", __version__),
+        info_plist={
+            "CFBundleDisplayName": f"{__appname__}",
+            "CFBundleShortVersionString": os.environ.get("BUILD_VERSION", __version__),
+            "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": False,  # respects dark/light mode
+            "LSMinimumSystemVersion": "13.0",
+            # for when you add AppleScript later:
+            "NSAppleEventsUsageDescription": f"{__appname__} uses AppleScript to open Finder windows.",
+            "NSScreenCaptureUsageDescription": f"{__appname__} requires Screen Recording to capture screenshots for bug reports.",
+        },
+    )
