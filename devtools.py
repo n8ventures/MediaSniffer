@@ -36,13 +36,13 @@ FINAL_DMG_FILE = f"{FINAL_DMG_NAME}.dmg"
 pre_existing_final_dmg = ROOT_DIR / FINAL_DMG_FILE
 
 # Signing — switch to "Developer ID Application: ..." when notarizing
-SIGNING_IDENTITY = "Apple Development: n8ventures@gmail.com (28N6MRL39U)"
+SIGNING_IDENTITY = "Developer ID Application: John Nathaniel Calvara (C9MNV8M79M)"
 ENTITLEMENTS_FILE = Path("entitlements.plist")
 
 # Set to True when switching to Developer ID for notarization.
 # Adds --timestamp to the codesign command (required by Apple for notarization,
 # but causes errSecInternalComponent with Apple Development certs during long builds).
-IS_DIST_BUILD = False
+IS_DIST_BUILD = True
 
 # Dylibs shipped by PaddlePaddle with SDK version (0,0,0) — invalid for
 # hardened-runtime signing. Must be re-signed individually after the build.
@@ -518,9 +518,6 @@ def main():
             version = read_base_version()
             FINAL_DMG_FILE_name = f"{FINAL_DMG_NAME}-{version}"
 
-            import shutil
-            import zipfile
-
             try:
                 print("  Checking if existing dmgs and zips are in Dist folder...")
                 dmg_in_dist = DIST_DIR / pre_existing_final_dmg
@@ -531,26 +528,19 @@ def main():
                 print(f"  ✗ Failed to delete dmgs: {e}")
 
             try:
-                version = read_base_version()
-                zip_output = Path(f"{FINAL_DMG_FILE_name}.zip")
-                with zipfile.ZipFile(zip_output, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-                    archive.write(pre_existing_final_dmg)
-
-                shutil.move(zip_output, DIST_DIR)
-                print("  Moved zipped DMG to dist Folder.")
-            except Exception as e:
-                print(f"  ✗ Failed to zip up DMG: {e}")
-
-            try:
                 shutil.move(pre_existing_final_dmg, DIST_DIR)
                 print("  Moved DMG to dist folder.")
             except Exception as e:
                 print(f"  ✗ Failed to Move DMG to dist folder: {e}")
 
+            dmg_path = DIST_DIR / "N8_MEDIA_SNIFFER.dmg"
             if IS_DIST_BUILD:
-                dmg_path = DIST_DIR / "N8_MEDIA_SNIFFER.dmg"
                 subprocess.run(["codesign", "--force", "--sign", SIGNING_IDENTITY, "--timestamp", str(dmg_path)])
                 notarize_and_staple(dmg_path)
+
+            zip_output = DIST_DIR / f"{FINAL_DMG_FILE_name}.zip"
+            subprocess.run(["ditto", "-c", "-k", "--keepParent", str(dmg_path), str(zip_output)])
+            print("  ✓ Zipped final signed/notarized/stapled DMG")
 
     sys.exit(returncode)
 
