@@ -381,7 +381,13 @@ class App(AppBaseClass):  # type: ignore
         apply_emoji(self.theme_toggle_btn, emoji_char="☀️" if ctk.get_appearance_mode() == "Dark" else "🌑", px=15)
         self.theme_toggle_btn.place(relx=1.0, x=-14, y=14, anchor="ne")
 
-        title = ctk.CTkLabel(self, text=f"{__appname__}", image=icon_ctkImage, compound="left", font=("", 20, "bold"))
+        title = ctk.CTkLabel(
+            self,
+            text=f"{__appname__}" if mac else f" {__appname__}",
+            image=icon_ctkImage,
+            compound="left",
+            font=("", 20, "bold"),
+        )
         title.image = icon_ctkImage
         title.pack(pady=(18, 4))
 
