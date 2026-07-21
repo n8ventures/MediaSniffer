@@ -4,6 +4,8 @@ import platform
 import tkinter as tk
 from pathlib import Path
 import json
+import tempfile
+import os
 
 # Check the platform
 current_platform = platform.system()
@@ -139,3 +141,25 @@ else:
             if bundle_path
             else "./assets/icons/mac/icon.png"
         )
+
+
+if bundle_path:
+    if mac:
+        # log_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Logs")
+        config_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Config")
+    elif win:
+        # log_dir = os.path.join(os.environ["LOCALAPPDATA"], __appname__, "Logs")
+        config_dir = os.path.join(os.environ["LOCALAPPDATA"], __appname__, "Config")
+
+    # temp_dir = os.path.join(tempfile.gettempdir(), __appname__)
+
+else:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # temp_dir = os.path.join(base_dir, "temp")
+    # log_dir = os.path.join(base_dir, "logs")
+    config_dir = os.path.join(base_dir, "config")
+
+# os.makedirs(temp_dir, exist_ok=True)
+# os.makedirs(log_dir, exist_ok=True)
+os.makedirs(config_dir, exist_ok=True)
