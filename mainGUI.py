@@ -31,7 +31,10 @@ import customtkinter as ctk
 
 import modules.media_core as core
 from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_running_from_bundle
-from modules.tkModules import watermark_label, apply_emoji
+from modules.tkModules import watermark_label, apply_emoji, animate_alpha
+from modules.configModule import set_setting
+
+
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
 
 ctk.set_appearance_mode("System")
@@ -501,20 +504,19 @@ class App(AppBaseClass):  # type: ignore
         # once every widget has finished redrawing. Reads as a clean "blink"
         # instead of a wave. -alpha is supported on macOS/Windows; wrapped in
         # try/except since some Linux window managers don't support it.
-        try:
-            self.attributes("-alpha", 0.0)
-        except tk.TclError:
-            pass
+        def _swap_and_reveal():
+            ctk.set_appearance_mode(new_mode)
+            set_setting("appearance_mode", new_mode)
+            self.theme_toggle_btn.configure(text="")
+            apply_emoji(
+                self.theme_toggle_btn,
+                emoji_char="☀️" if new_mode == "Dark" else "🌑",
+                px=15,
+            )
+            self.update_idletasks()
+            animate_alpha(self, 1.0, duration_ms=250)
 
-        ctk.set_appearance_mode(new_mode)
-        self.theme_toggle_btn.configure(text="")
-        apply_emoji(self.theme_toggle_btn, emoji_char="☀️" if new_mode == "Dark" else "🌑", px=15)
-        self.update_idletasks()  # force every widget to finish redrawing now, while hidden
-
-        try:
-            self.after(60, lambda: self.attributes("-alpha", 1.0))
-        except tk.TclError:
-            pass
+        animate_alpha(self, 0.0, duration_ms=150, on_complete=_swap_and_reveal)
 
     def _check_binaries(self):
         if not core.binaries_available():
