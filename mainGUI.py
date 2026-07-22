@@ -30,12 +30,15 @@ import time
 import customtkinter as ctk
 
 import modules.media_core as core
-from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_running_from_bundle
+from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_dev_build, is_running_from_bundle
 from modules.tkModules import watermark_label, apply_emoji, animate_alpha
 from modules.configModule import set_setting
 
 
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
+
+if is_dev_build:
+    __appname__ = f"{__appname__} (Beta)"
 
 ctk.set_appearance_mode("System")
 theme_path = (
