@@ -21,6 +21,13 @@ from pathlib import Path
 
 from modules.platformModules import mac, win
 
+if win:
+    from __version__ import __version__ as __version__script
+if mac:
+    from __version__ import __versionMac__ as __version__script
+
+is_dev_build = any(char.isalpha() for char in __version__script)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 SPEC_FILE = "N8MediaSniffer.spec"
@@ -30,8 +37,12 @@ DIST_DIR = Path("dist")
 ROOT_DIR = Path(".")
 APP = "N8's Media Sniffer"
 EXT = ".app" if mac else ".exe"
+FINAL_DMG_NAME = "N8's Media Sniffer Installer"
 
-FINAL_DMG_NAME = "N8_MEDIA_SNIFFER"
+if is_dev_build:
+    APP = f"{APP} (Beta)"
+    FINAL_DMG_NAME = f"{FINAL_DMG_NAME} (Beta)"
+
 FINAL_DMG_FILE = f"{FINAL_DMG_NAME}.dmg"
 pre_existing_final_dmg = ROOT_DIR / FINAL_DMG_FILE
 
@@ -59,18 +70,16 @@ def build_icons():
     if mac:
         ICONS_DIR = "./assets/icons/mac/"
         pngtoicns(f"{ICONS_DIR}icon.png", ICONS_DIR)
-        try:
-            pngtoicns(f"{ICONS_DIR}icoDMG.png", ICONS_DIR)
-        except:
-            pass
+        pngtoicns(f"{ICONS_DIR}icon-dev.png", ICONS_DIR)
+        pngtoicns(f"{ICONS_DIR}iconDMG.png", ICONS_DIR)
+        pngtoicns(f"{ICONS_DIR}iconDMG-dev.png", ICONS_DIR)
+
         print("  ✓ Mac Icons built using tools/icnsBuilder.py - pngtoicns")
     if win:
         ICONS_DIR = "./assets/icons/win/"
         pngtoico(f"{ICONS_DIR}icon.png", ICONS_DIR)
-        try:
-            pngtoico(f"{ICONS_DIR}icon-dev.png", ICONS_DIR)
-        except:
-            pass
+        pngtoico(f"{ICONS_DIR}icon-dev.png", ICONS_DIR)
+
         print("  ✓ Windows Icons built using tools/icnsBuilder.py - pngtoico")
 
 
@@ -132,6 +141,23 @@ def make_build_label(base_version: str, count: int, now: datetime) -> str:
     date_part = now.strftime("%Y%m%d")
     time_part = now.strftime("%H%M")
     return f"{base_version}-B{count}.{date_part}{time_part}"
+
+
+def get_brew_openssl_root() -> Path:
+    """Return the best Homebrew OpenSSL path for the current build.
+
+    Prefer Intel Homebrew on x86_64 builds, fall back to ARM Homebrew if needed.
+    """
+    candidates = [
+        Path("/usr/local/opt/openssl@3/lib"),
+        Path("/opt/homebrew/opt/openssl@3/lib"),
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[-1]
 
 
 def update_changelog():
@@ -234,10 +260,11 @@ def fix_ssl_dylib_conflict(app_path: Path):
     """
     frameworks = app_path / "Contents" / "Frameworks"
 
-    brew_root = Path("/opt/homebrew/opt/openssl@3/lib")
+    brew_root = get_brew_openssl_root()
     ssl_libs = ["libssl.3.dylib", "libcrypto.3.dylib"]
 
     print("Fixing OpenSSL dylib conflict (cv2 vs Python _ssl)...")
+    print(f"    Using OpenSSL from: {brew_root}")
 
     if not brew_root.exists():
         print(f"    ✗  Homebrew openssl@3 not found at {brew_root}")
@@ -460,6 +487,8 @@ def build_dmg(app_name="N8's Media Sniffer"):
     management when detaching the temporary mount. Calling the API directly
     runs in the same process context and avoids this entirely.
     """
+    if is_dev_build:
+        app_name = f"{app_name} (Beta)"
 
     try:
         import dmgbuild as _dmgbuild
@@ -474,14 +503,24 @@ def build_dmg(app_name="N8's Media Sniffer"):
         dmg_out.unlink()
 
     print(f"  Building DMG from {app_src.name}...")
-    _dmgbuild.build_dmg(
-        filename=str(dmg_out),
-        volume_name=app_name,
-        settings_file="dmg_settings.py",
-        defines={"app": str(app_src)},  # absolute path → no move-to-root needed
-        detach_retries=10,  # extra retries in case Spotlight is busy
-    )
-    print(f"  ✓ DMG built: {dmg_out}")
+    if is_dev_build:
+        _dmgbuild.build_dmg(
+            filename=str(dmg_out),
+            volume_name=app_name,
+            settings_file="dmg_settings_beta.py",
+            defines={"app": str(app_src)},  # absolute path → no move-to-root needed
+            detach_retries=10,  # extra retries in case Spotlight is busy
+        )
+        print(f"  ✓ Beta DMG built: {dmg_out}")
+    else:
+        _dmgbuild.build_dmg(
+            filename=str(dmg_out),
+            volume_name=app_name,
+            settings_file="dmg_settings.py",
+            defines={"app": str(app_src)},  # absolute path → no move-to-root needed
+            detach_retries=10,  # extra retries in case Spotlight is busy
+        )
+        print(f"  ✓ DMG built: {dmg_out}")
 
     if dmg_out.exists():
         dmg_out.rename(DIST_DIR / FINAL_DMG_FILE)
@@ -502,15 +541,26 @@ def build_dmg(app_name="N8's Media Sniffer"):
 
             try:
                 print(f"  Setting DMG icon using 'fileicon'...")
-                subprocess.run(
-                    [
-                        "fileicon",
-                        "set",
-                        str(pre_existing_final_dmg),
-                        "assets/icons/mac/icoDMG.icns",
-                    ],
-                    check=True,
-                )
+                if is_dev_build:
+                    subprocess.run(
+                        [
+                            "fileicon",
+                            "set",
+                            str(pre_existing_final_dmg),
+                            "assets/icons/mac/iconDMG-dev.icns",
+                        ],
+                        check=True,
+                    )
+                else:
+                    subprocess.run(
+                        [
+                            "fileicon",
+                            "set",
+                            str(pre_existing_final_dmg),
+                            "assets/icons/mac/iconDMG.icns",
+                        ],
+                        check=True,
+                    )
             except Exception as e:
                 print(f"  ✗ Failed to set DMG icon: {e}")
                 print("  Please ensure 'fileicon' is installed and available in PATH.")
@@ -624,10 +674,11 @@ def main():
             if IS_DIST_BUILD:
                 subprocess.run(["codesign", "--force", "--sign", SIGNING_IDENTITY, "--timestamp", str(dmg_path)])
                 notarize_and_staple(dmg_path)
+                print("  ✓ signed/notarized/stapled DMG")
 
             zip_output = DIST_DIR / f"MacOS-{FINAL_DMG_FILE_name.replace(" ", ".").replace("'",".")}.zip"
             subprocess.run(["ditto", "-c", "-k", str(dmg_path), str(zip_output)])
-            print("  ✓ Zipped final signed/notarized/stapled DMG")
+            print("  ✓ Zipped final DMG")
 
     sys.exit(returncode)
 
