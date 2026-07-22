@@ -59,12 +59,19 @@ def build_icons():
     if mac:
         ICONS_DIR = "./assets/icons/mac/"
         pngtoicns(f"{ICONS_DIR}icon.png", ICONS_DIR)
-        pngtoicns(f"{ICONS_DIR}icoDMG.png", ICONS_DIR)
-        print("  ✓ Mac Icons built using tools/icnsBuilder.py")
+        try:
+            pngtoicns(f"{ICONS_DIR}icoDMG.png", ICONS_DIR)
+        except:
+            pass
+        print("  ✓ Mac Icons built using tools/icnsBuilder.py - pngtoicns")
     if win:
         ICONS_DIR = "./assets/icons/win/"
         pngtoico(f"{ICONS_DIR}icon.png", ICONS_DIR)
-        print("  ✓ Windows Icons built using tools/icnsBuilder.py")
+        try:
+            pngtoico(f"{ICONS_DIR}icon-dev.png", ICONS_DIR)
+        except:
+            pass
+        print("  ✓ Windows Icons built using tools/icnsBuilder.py - pngtoico")
 
 
 # ── Build JSON ────────────────────────────────────────────────────────────────
@@ -183,7 +190,7 @@ def run_pyinstaller(build_label: str) -> int:
 
 def post_build_summary(build_label: str, count: int, success: bool):
     print("\n" + "─" * 60)
-    app_path = DIST_DIR / f"{APP}{EXT}"
+    app_path = DIST_DIR / f"{APP.replace(" ", "").replace("'","") if win else APP}{EXT}"
 
     if success:
         if app_path.is_dir():
@@ -257,6 +264,76 @@ def fix_ssl_dylib_conflict(app_path: Path):
         else:
             shutil.copy2(src, dest)
             print(f"    ✓  {name}: added Homebrew version")
+
+
+def fix_ssl_dylib_paths(app_path: Path):
+    """
+    After copying/replacing libssl/libcrypto in Frameworks/, their internal
+    load-command paths still point at the absolute Homebrew location they
+    were originally linked against. That works fine locally (you have
+    Homebrew installed) but breaks on any other machine, and even locally
+    it gets blocked by Library Validation since the copied files still
+    carry Homebrew's original code signature, not yours.
+
+    This rewrites libssl's dependency on libcrypto to @loader_path (so it
+    resolves relative to wherever libssl itself ends up inside the bundle)
+    and re-signs both files plus the outer .app so the signatures are
+    consistent again after editing.
+
+    Unlike a hardcoded `install_name_tool -change /opt/homebrew/Cellar/
+    openssl@3/<version>/lib/libcrypto.3.dylib ...`, this reads whatever
+    path is ACTUALLY baked into libssl via `otool -L` first, so it keeps
+    working across Homebrew OpenSSL version bumps without edits.
+    """
+    frameworks = app_path / "Contents" / "Frameworks"
+    libssl = frameworks / "libssl.3.dylib"
+    libcrypto = frameworks / "libcrypto.3.dylib"
+
+    if not (libssl.exists() and libcrypto.exists()):
+        print("    ⚠  libssl/libcrypto not found in Frameworks — skipping path fix")
+        return
+
+    # Ask libssl itself what path it currently references for libcrypto,
+    # rather than assuming a specific Homebrew Cellar version string.
+    otool_output = subprocess.run(
+        ["otool", "-L", str(libssl)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    # Match any absolute path ending in libcrypto.3.dylib on its own line,
+    # e.g. "        /opt/homebrew/Cellar/openssl@3/3.6.2/lib/libcrypto.3.dylib (compatibility version ...)"
+    match = re.search(r"^\s*(\S+/libcrypto\.3\.dylib)", otool_output, re.MULTILINE)
+
+    if not match:
+        print("    ⚠  Could not find a libcrypto.3.dylib reference in libssl — skipping path fix")
+        return
+
+    current_libcrypto_path = match.group(1)
+
+    if current_libcrypto_path == "@loader_path/libcrypto.3.dylib":
+        print("    ✓  libssl already points at @loader_path/libcrypto.3.dylib — nothing to do")
+        return
+
+    print(f"    Found libssl → libcrypto reference: {current_libcrypto_path}")
+
+    subprocess.run(
+        [
+            "install_name_tool",
+            "-change",
+            current_libcrypto_path,
+            "@loader_path/libcrypto.3.dylib",
+            str(libssl),
+        ],
+        check=True,
+    )
+
+    for lib in (libcrypto, libssl):
+        subprocess.run(["codesign", "--force", "--sign", "-", str(lib)], check=True)
+
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app_path)], check=True)
+    print("    ✓  libssl → libcrypto path rewritten to @loader_path, re-signed")
 
 
 # ── Post-build signing ────────────────────────────────────────────────────────
@@ -448,7 +525,7 @@ def build_dmg(app_name="N8's Media Sniffer"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Media Sniffer build tool")
+    parser = argparse.ArgumentParser(description="Video To Gifski build tool")
     parser.add_argument("--dry", action="store_true", help="Preview version, skip build")
     parser.add_argument("--reset", action="store_true", help="Reset build counter to 0")
     parser.add_argument("--count", type=int, help="Override build count (doesn't save)")
@@ -500,7 +577,7 @@ def main():
     # Write the full record now — GUI can read this even from inside the app
     save_build_info(count, base_version, label, now)
 
-    print(f"\n  N8's Media Sniffer — {label}")
+    print(f"\n {APP} — {label}")
     print("─" * 60)
     if win:
         from tools.generateRC import genMainRC
@@ -517,6 +594,7 @@ def main():
 
         if mac:
             fix_ssl_dylib_conflict(app_path)
+            fix_ssl_dylib_paths(app_path)
             sign_app(app_path)
 
             if IS_DIST_BUILD:
@@ -542,13 +620,13 @@ def main():
             except Exception as e:
                 print(f"  ✗ Failed to Move DMG to dist folder: {e}")
 
-            dmg_path = DIST_DIR / "N8_MEDIA_SNIFFER.dmg"
+            dmg_path = DIST_DIR / f"{FINAL_DMG_NAME}.dmg"
             if IS_DIST_BUILD:
                 subprocess.run(["codesign", "--force", "--sign", SIGNING_IDENTITY, "--timestamp", str(dmg_path)])
                 notarize_and_staple(dmg_path)
 
-            zip_output = DIST_DIR / f"{FINAL_DMG_FILE_name}.zip"
-            subprocess.run(["ditto", "-c", "-k", "--keepParent", str(dmg_path), str(zip_output)])
+            zip_output = DIST_DIR / f"MacOS-{FINAL_DMG_FILE_name.replace(" ", ".").replace("'",".")}.zip"
+            subprocess.run(["ditto", "-c", "-k", str(dmg_path), str(zip_output)])
             print("  ✓ Zipped final signed/notarized/stapled DMG")
 
     sys.exit(returncode)
