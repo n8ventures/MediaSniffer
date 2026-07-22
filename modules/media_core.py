@@ -52,7 +52,7 @@ def is_media_file(filename):
 # Windows x64 are covered by a bundled copy right now — Intel Mac and Linux
 # fall back to whatever's on PATH.
 # --------------------------------------------------------------------------
-from modules.platformModules import win, mac, bundle_path
+from modules.platformModules import win, mac, intel, bundle_path
 
 _FFMPEG_PATH = None
 _FFPROBE_PATH = None
@@ -74,7 +74,15 @@ def _bundled_bin_candidates():
     than assuming one. Verify with `find *.app -name ffmpeg` after a build
     and trim this list down once you know where yours actually lands.
     """
-    folder = "Win64" if win else "Silicon" if mac else None
+    folder = None
+    if win:
+
+        folder = "Win64"
+    elif mac:
+        if intel:
+            folder = "Intel"
+        else:
+            folder = "Silicon"
     if not folder:
         return []
 

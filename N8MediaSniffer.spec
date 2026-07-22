@@ -10,9 +10,14 @@ from PyInstaller.utils.hooks import (
     collect_dynamic_libs,
 )
 from importlib.metadata import PackageNotFoundError
-from modules.platformModules import mac, win
+from modules.platformModules import mac, win, intel
 from __version__ import __versionMac__ as __version__
 from __version__ import __author__, __appname__, __internal_app_name__
+
+is_dev_build = any(char.isalpha() for char in __version__)
+
+if is_dev_build:
+    __appname__ = f"{__appname__} (Beta)"
 
 block_cipher = None
 
@@ -53,15 +58,28 @@ datas += collect_data_files("tkinterdnd2")
 # binaries (picked up by your codesigning step in devtools.py, same as any
 # other binary in the bundle). No more static_ffmpeg / runtime download.
 if mac:
-    binaries += [
-        ("bin/Silicon/ffmpeg", "bin/Silicon"),
-        ("bin/Silicon/ffprobe", "bin/Silicon"),
-    ]
+    if intel:
+        binaries += [
+            ("bin/Intel/ffmpeg", "bin/Intel"),
+            ("bin/Intel/ffprobe", "bin/Intel"),
+        ]
+    else:
+        binaries += [
+            ("bin/Silicon/ffmpeg", "bin/Silicon"),
+            ("bin/Silicon/ffprobe", "bin/Silicon"),
+        ]
     datas += [
         ("assets/icons/mac/icon.icns", "assets/icons/mac"),
         ("assets/icons/mac/icon.png", "assets/icons/mac"),
     ]
-    icon = "assets/icons/mac/icon.icns"
+    if is_dev_build:
+        datas += [
+            ("assets/icons/mac/icon-dev.icns", "assets/icons/mac"),
+            ("assets/icons/mac/icon-dev.png", "assets/icons/mac"),
+        ]
+        icon = "assets/icons/mac/icon-dev.icns"
+    else:
+        icon = "assets/icons/mac/icon.icns"
 if win:
     binaries += [
         ("bin/Win64/ffmpeg.exe", "bin/Win64"),
@@ -71,7 +89,14 @@ if win:
         ("assets/icons/win/icon.ico", "assets/icons/win"),
         ("assets/icons/win/icon.png", "assets/icons/win"),
     ]
-    icon = "assets/icons/win/icon.ico"
+    if is_dev_build:
+        datas += [
+            ("assets/icons/win/icon-dev.ico", "assets/icons/win"),
+            ("assets/icons/win/icon-dev.png", "assets/icons/win"),
+        ]
+        icon = "assets/icons/win/icon-dev.ico"
+    else:
+        icon = "assets/icons/win/icon.ico"
 
 a = Analysis(  # type: ignore
     ["mainGUI.py"],

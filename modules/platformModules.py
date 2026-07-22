@@ -9,9 +9,11 @@ import os
 
 # Check the platform
 current_platform = platform.system()
+architecture = platform.machine().lower()
 
 win = current_platform == "Windows"
 mac = current_platform == "Darwin"
+intel = architecture in ("x86_64", "amd64")
 
 
 def is_running_from_bundle():
@@ -102,31 +104,30 @@ def get_build_label():
             return f"Source Version. (Builds: {build_count})"
 
 
-if mac:
-    icon_png = (
-        os.path.join(bundle_path, "assets", "icons", "mac", "icon.png")
-        if bundle_path
-        else "./assets/icons/mac/icon.png"
-    )
-if win:
-    icon_png = (
-        os.path.join(bundle_path, "assets", "icons", "win", "icon.png")
-        if bundle_path
-        else "./assets/icons/win/icon.png"
-    )
+is_dev_build = any(char.isalpha() for char in __version__) or __version__.startswith("0.")
 
-if any(char.isalpha() for char in __version__) or __version__.startswith("0."):
+if is_dev_build:
     if win:
         icon = (
-            os.path.join(bundle_path, "assets", "icons", "win", "icoDev.ico")
+            os.path.join(bundle_path, "assets", "icons", "win", "icon-dev.ico")
             if bundle_path
-            else "./assets/icons/win/icoDev.ico"
+            else "./assets/icons/win/icon-dev.ico"
+        )
+        icon_png = (
+            os.path.join(bundle_path, "assets", "icons", "win", "icon-dev.png")
+            if bundle_path
+            else "./assets/icons/win/icon-dev.png"
         )
     elif mac:
         icon = (
-            os.path.join(bundle_path, "assets", "icons", "mac", "icoDev.png")
+            os.path.join(bundle_path, "assets", "icons", "mac", "icon-dev.png")
             if bundle_path
-            else "./assets/icons/mac/icoDev.png"
+            else "./assets/icons/mac/icon-dev.png"
+        )
+        icon_png = (
+            os.path.join(bundle_path, "assets", "icons", "mac", "icon-dev.png")
+            if bundle_path
+            else "./assets/icons/mac/icon-dev.png"
         )
 else:
     if win:
@@ -135,8 +136,18 @@ else:
             if bundle_path
             else "assets/icons/win/icon.ico"
         )
+        icon_png = (
+            os.path.join(bundle_path, "assets", "icons", "win", "icon.png")
+            if bundle_path
+            else "./assets/icons/win/icon.png"
+        )
     elif mac:
         icon = (
+            os.path.join(bundle_path, "assets", "icons", "mac", "icon.png")
+            if bundle_path
+            else "./assets/icons/mac/icon.png"
+        )
+        icon_png = (
             os.path.join(bundle_path, "assets", "icons", "mac", "icon.png")
             if bundle_path
             else "./assets/icons/mac/icon.png"
