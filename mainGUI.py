@@ -148,8 +148,24 @@ def enable_precise_scrolling(scrollable_frame):
             dx, dy = map(int, canvas.tk.call("tk::PreciseScrollDeltas", event.delta))
         except tk.TclError:
             return
-        if dy and canvas.yview() != (0.0, 0.0):
-            canvas.yview_scroll(-1 if dy > 0 else 1, "units")
+        if not dy:
+            return
+        top, bottom = canvas.yview()
+        if bottom - top >= 1.0:
+            return  # everything already fits — nothing to scroll
+        try:
+            x1, y1, x2, y2 = map(float, str(canvas.cget("scrollregion")).split())
+        except (ValueError, tk.TclError):
+            return
+        total_height = y2 - y1
+        if total_height <= 0:
+            return
+        # Move by the exact pixel delta the trackpad reported, expressed as
+        # a fraction of the full scrollable height — same math yview()
+        # itself uses, so whatever curve the OS is already sending
+        # (fast swipe, slow swipe, decelerating momentum tail) comes
+        # through unmodified instead of being quantized into fixed steps.
+        canvas.yview_moveto(min(max(top - (dy / total_height), 0.0), 1.0))
 
     try:
         scrollable_frame.bind_all("<TouchpadScroll>", _on_touchpad_scroll, add="+")
@@ -245,7 +261,7 @@ class ResultsWindow(ctk.CTkToplevel):
         self.root_label = root_label
 
         self.title("Scan Results")
-        width = 740
+        width = 700
         height = 800
         x = (self.winfo_screenwidth() - width) // 2
         y = (self.winfo_screenheight() - height) // 2
@@ -356,6 +372,7 @@ class ResultsWindow(ctk.CTkToplevel):
 
                 rows_frame = ctk.CTkFrame(card, fg_color="transparent")
                 rows_frame.pack(fill="x", padx=12, pady=(0, 8))
+                rows_frame.grid_columnconfigure(1, weight=1)
                 for r, (label, value) in enumerate(core.info_rows(info, self.options)):
                     lbl = ctk.CTkLabel(
                         rows_frame,
@@ -363,11 +380,19 @@ class ResultsWindow(ctk.CTkToplevel):
                         text_color=rows_color,
                         font=("", 12, "bold"),
                         anchor="w",
+                        justify="left",
                         width=150,
+                        wraplength=140,
                     )
-                    lbl.grid(row=r, column=0, sticky="w", pady=1)
+                    lbl.grid(row=r, column=0, sticky="nw", pady=1)
                     val = ctk.CTkLabel(rows_frame, text=str(value), anchor="w", justify="left")
-                    val.grid(row=r, column=1, sticky="w", pady=1, padx=(6, 0))
+                    val.grid(row=r, column=1, sticky="ew", pady=1, padx=(6, 0))
+                    # Field values (esp. QC verdicts / long codec strings) can
+                    # easily run past the card width — wrap instead of
+                    # overflowing it. wraplength has to be a pixel number, not
+                    # "fill the cell", so it's kept in sync with the label's
+                    # actual allocated width as the (resizable) window resizes.
+                    val.bind("<Configure>", lambda e, w=val: w.configure(wraplength=max(e.width, 1)))
 
     def _on_save(self):
         label = self.format_var.get()
