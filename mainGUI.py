@@ -300,6 +300,15 @@ class ResultsWindow(ctk.CTkToplevel):
         self.scroll = ctk.CTkScrollableFrame(self)
         self.scroll.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         enable_precise_scrolling(self.scroll)
+
+        # Shown immediately (this window itself opens fast — it's only the
+        # per-file card population that's slow), replaced as results fill
+        # in below it, removed once the last chunk lands. A second popup
+        # on top of a window that's already open is more churn than this
+        # needs — this is a state within the window, not a separate one.
+        self._loading_label = ctk.CTkLabel(self.scroll, text="Populating results…", text_color="gray55", font=("", 12))
+        self._loading_label.pack(pady=20)
+
         self._build_results()
 
         # Bottom bar (Save As / Exit)
@@ -329,70 +338,123 @@ class ResultsWindow(ctk.CTkToplevel):
             else None
         )
 
+        # Flatten to a single work list and build it a few items per idle
+        # tick instead of all at once. With several checkboxes on, even a
+        # handful of files means 100+ CTk widgets — building them all in
+        # one call blocks the main thread until every one exists, which is
+        # the "still populating" freeze. This doesn't make the total work
+        # any less, it just lets Tk repaint between chunks so the window
+        # fills in progressively instead of stalling.
+        work = []
         for entry in self.scan_results:
-            count = len(entry["files"])
-            dir_label = ctk.CTkLabel(
-                self.scroll,
-                text="",
-                font=("", 14, "bold"),
-                text_color=dir_color,
-            )
-            apply_emoji(dir_label, "📁", f" {entry['dir']}  ({count} file{'s' if count != 1 else ''})", 14)
-            dir_label.pack(fill="x", pady=(10, 2), anchor="w")
-
+            work.append(("dir", entry))
             for filename, info in entry["files"]:
-                verdict = core.evaluate_target(info, target) if target and "error" not in info else None
-                verdict_status = verdict["status"] if verdict else None
+                work.append(("file", (filename, info)))
+        total_file_items = sum(1 for kind, _ in work if kind == "file")
 
-                card = ctk.CTkFrame(self.scroll, corner_radius=8)
-                if verdict_status in ("pass", "fail", "warn"):
-                    card.configure(border_width=2, border_color=VERDICT_COLOR[verdict_status])
-                card.pack(fill="x", pady=4)
+        def build_chunk(index=0, chunk_size=3):
+            end = min(index + chunk_size, len(work))
+            for kind, payload in work[index:end]:
+                if kind == "dir":
+                    self._build_dir_row(payload)
+                else:
+                    filename, info = payload
+                    self._build_file_card(filename, info, target)
+            if end < len(work):
+                done_files = sum(1 for kind, _ in work[:end] if kind == "file")
+                if self._loading_label.winfo_exists():
+                    self._loading_label.configure(text=f"Populating results… {done_files}/{total_file_items}")
+                self.after(1, build_chunk, end, chunk_size)
+            elif self._loading_label.winfo_exists():
+                self._loading_label.destroy()
 
-                icon = "🎬" if info.get("kind") == "video" else "🖼️"
-                title = ctk.CTkLabel(card, text="", font=("", 13, "bold"), text_color=filename_color)
-                apply_emoji(title, icon, f" {filename}", 13)
-                title.pack(anchor="w", padx=12, pady=(8, 2))
+        build_chunk()
 
-                if "error" in info:
-                    err = ctk.CTkLabel(card, text=f"", text_color=error_color)
-                    apply_emoji(widget=err, emoji_char="⚠️", text=f" {info['error']}")
-                    err.pack(anchor="w", padx=12, pady=(0, 8))
-                    continue
+    def _build_dir_row(self, entry):
+        count = len(entry["files"])
+        dir_label = ctk.CTkLabel(
+            self.scroll,
+            text="",
+            font=("", 14, "bold"),
+            text_color=dir_color,
+        )
+        apply_emoji(dir_label, "📁", f" {entry['dir']}  ({count} file{'s' if count != 1 else ''})", 14)
+        dir_label.pack(fill="x", pady=(10, 2), anchor="w")
 
-                if verdict_status in ("pass", "fail", "warn"):
-                    badge = ctk.CTkLabel(
-                        card,
-                        text=f"{VERDICT_BADGE[verdict_status]}",
-                        font=("", 12, "bold"),
-                        text_color=VERDICT_COLOR[verdict_status],
-                        anchor="w",
-                    )
-                    badge.pack(anchor="w", padx=12, pady=(0, 2))
+    def _build_file_card(self, filename, info, target):
+        verdict = core.evaluate_target(info, target) if target and "error" not in info else None
+        verdict_status = verdict["status"] if verdict else None
 
-                rows_frame = ctk.CTkFrame(card, fg_color="transparent")
-                rows_frame.pack(fill="x", padx=12, pady=(0, 8))
-                rows_frame.grid_columnconfigure(1, weight=1)
-                for r, (label, value) in enumerate(core.info_rows(info, self.options)):
-                    lbl = ctk.CTkLabel(
-                        rows_frame,
-                        text=f"{label}:",
-                        text_color=rows_color,
-                        font=("", 12, "bold"),
-                        anchor="w",
-                        justify="left",
-                        width=150,
-                        wraplength=140,
-                    )
-                    lbl.grid(row=r, column=0, sticky="nw", pady=1)
-                    val = ctk.CTkLabel(rows_frame, text=str(value), anchor="w", justify="left")
-                    val.grid(row=r, column=1, sticky="ew", pady=1, padx=(6, 0))
-                    # Field values (esp. QC verdicts / long codec strings) can
-                    # easily run past the card width — wrap instead of
-                    # overflowing it. wraplength has to be a pixel number, not
-                    # "fill the cell", so it's kept in sync with the label's
-                    # actual allocated width as the (resizable) window resizes.
-                    val.bind("<Configure>", lambda e, w=val: w.configure(wraplength=max(e.width, 1)))
+        card = ctk.CTkFrame(self.scroll, corner_radius=8)
+        if verdict_status in ("pass", "fail", "warn"):
+            card.configure(border_width=2, border_color=VERDICT_COLOR[verdict_status])
+        card.pack(fill="x", pady=4)
+
+        icon = "🎬" if info.get("kind") == "video" else "🖼️"
+        title = ctk.CTkLabel(card, text="", font=("", 13, "bold"), text_color=filename_color)
+        apply_emoji(title, icon, f" {filename}", 13)
+        title.pack(anchor="w", padx=12, pady=(8, 2))
+
+        if "error" in info:
+            err = ctk.CTkLabel(card, text=f"", text_color=error_color)
+            apply_emoji(widget=err, emoji_char="⚠️", text=f" {info['error']}")
+            err.pack(anchor="w", padx=12, pady=(0, 8))
+            return
+
+        if verdict_status in ("pass", "fail", "warn"):
+            badge = ctk.CTkLabel(
+                card,
+                text=f"{VERDICT_BADGE[verdict_status]}",
+                font=("", 12, "bold"),
+                text_color=VERDICT_COLOR[verdict_status],
+                anchor="w",
+            )
+            badge.pack(anchor="w", padx=12, pady=(0, 2))
+
+        rows_frame = ctk.CTkFrame(card, fg_color="transparent")
+        rows_frame.pack(fill="x", padx=12, pady=(0, 8))
+        rows_frame.grid_columnconfigure(1, weight=1)
+        value_labels = []
+        for r, (label, value) in enumerate(core.info_rows(info, self.options)):
+            lbl = ctk.CTkLabel(
+                rows_frame,
+                text=f"{label}:",
+                text_color=rows_color,
+                font=("", 12, "bold"),
+                anchor="w",
+                justify="left",
+                width=150,
+                wraplength=140,
+            )
+            lbl.grid(row=r, column=0, sticky="nw", pady=1)
+            val = ctk.CTkLabel(rows_frame, text=str(value), anchor="w", justify="left")
+            val.grid(row=r, column=1, sticky="ew", pady=1, padx=(6, 0))
+            value_labels.append(val)
+
+        self._bind_wrap_reflow(rows_frame, value_labels)
+
+    def _bind_wrap_reflow(self, rows_frame, value_labels):
+        """One <Configure> binding per card's whole row set, not one per
+        value label — with N rows, N separate bindings each independently
+        calling .configure() (expensive for CTk widgets) all fired for
+        what's really a single resize event. Debounced too, so a live
+        drag-resize collapses into one reflow instead of firing on every
+        intermediate pixel."""
+        pending = {"id": None}
+
+        def apply_wrap():
+            pending["id"] = None
+            for val in value_labels:
+                w = val.winfo_width()
+                if w > 1:
+                    val.configure(wraplength=w)
+
+        def on_configure(_event):
+            if pending["id"] is not None:
+                self.after_cancel(pending["id"])
+            pending["id"] = self.after(80, apply_wrap)
+
+        rows_frame.bind("<Configure>", on_configure)
 
     def _on_save(self):
         label = self.format_var.get()
