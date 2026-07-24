@@ -32,7 +32,15 @@ import customtkinter as ctk
 import modules.media_core as core
 from modules.platformModules import win, mac, icon, icon_png, bundle_path, is_dev_build, is_running_from_bundle
 from modules.tkModules import watermark_label, apply_emoji, animate_alpha
-from modules.configModule import set_setting
+from modules.configModule import (
+    set_setting,
+    load_custom_targets,
+    save_custom_target,
+    delete_custom_target,
+    load_presets,
+    save_preset,
+    delete_preset,
+)
 
 
 from __version__ import __author__, __version__, __appname__, __internal_app_name__
@@ -161,7 +169,19 @@ CHECKBOX_DEFS = [
     ("tvc_slate", "Detect TVC Slate Beep (.mov 22s/37s)", False),
 ]
 
-PLATFORM_TARGET_OPTIONS = ["None"] + list(core.PLATFORM_TARGETS.keys())
+
+def _all_target_names():
+    """Built-in platform targets plus any custom target profiles saved via
+    the "Manage Targets…" dialog or hand-edited into config.json."""
+    return ["None"] + list(core.PLATFORM_TARGETS.keys()) + list(load_custom_targets().keys())
+
+
+VERDICT_COLOR = {
+    "pass": ("#1a7a1a", "#4fd15a"),
+    "fail": ("#a52a2a", "#e05555"),
+    "warn": ("#b8860b", "#f1c40f"),
+}
+VERDICT_BADGE = {"pass": "PASS", "fail": "FAIL", "warn": "INCOMPLETE"}
 
 SAVE_FORMATS = [
     ("HTML (.html)", "html", ".html"),
@@ -204,6 +224,11 @@ class ProgressPopup(ctk.CTkToplevel):
         self.total = max(total, 1)
 
     def update_progress(self, index, filename):
+        max_length = 45
+        if len(filename) > max_length:
+            part_len = (max_length - 3) // 2
+            filename = filename[:part_len] + "..." + filename[-part_len:]
+
         self.label_status.configure(text=f"Scanning {index} / {self.total}")
         self.label_file.configure(text=filename)
         self.progress.set(index / self.total)
@@ -220,8 +245,8 @@ class ResultsWindow(ctk.CTkToplevel):
         self.root_label = root_label
 
         self.title("Scan Results")
-        width = 760
-        height = 700
+        width = 740
+        height = 800
         x = (self.winfo_screenwidth() - width) // 2
         y = (self.winfo_screenheight() - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y-35}")
@@ -237,13 +262,22 @@ class ResultsWindow(ctk.CTkToplevel):
             font=("", 15, "bold"),
         )
 
-        apply_emoji(
-            header,
-            "🔍",
-            f"{total_files} file(s) scanned  ·  {core.human_size(total_size)}"
-            + (f"  ·  {error_files} error(s)" if error_files else ""),
-            15,
-        )
+        summary = f"{total_files} file(s) scanned  ·  {core.human_size(total_size)}"
+        if error_files:
+            summary += f"  ·  {error_files} error(s)"
+        verdict_counts = core.scan_verdict_counts(scan_results, options)
+        if verdict_counts:
+            parts = []
+            if verdict_counts["pass"]:
+                parts.append(f"✅ {verdict_counts['pass']} passed")
+            if verdict_counts["fail"]:
+                parts.append(f"❌ {verdict_counts['fail']} failed")
+            if verdict_counts["warn"]:
+                parts.append(f"⚠️ {verdict_counts['warn']} incomplete")
+            if parts:
+                summary += "  ·  " + "  ·  ".join(parts)
+
+        apply_emoji(header, "🔍", summary, 15)
         header.pack(pady=(12, 4), padx=16, anchor="w")
 
         # Scrollable results area
@@ -272,6 +306,13 @@ class ResultsWindow(ctk.CTkToplevel):
         exit_btn.pack(side="right")
 
     def _build_results(self):
+        target_key = self.options.get("platform_target")
+        target = (
+            core.resolve_target(target_key, self.options.get("custom_targets"))
+            if target_key and target_key != "None"
+            else None
+        )
+
         for entry in self.scan_results:
             count = len(entry["files"])
             dir_label = ctk.CTkLabel(
@@ -284,7 +325,12 @@ class ResultsWindow(ctk.CTkToplevel):
             dir_label.pack(fill="x", pady=(10, 2), anchor="w")
 
             for filename, info in entry["files"]:
+                verdict = core.evaluate_target(info, target) if target and "error" not in info else None
+                verdict_status = verdict["status"] if verdict else None
+
                 card = ctk.CTkFrame(self.scroll, corner_radius=8)
+                if verdict_status in ("pass", "fail", "warn"):
+                    card.configure(border_width=2, border_color=VERDICT_COLOR[verdict_status])
                 card.pack(fill="x", pady=4)
 
                 icon = "🎬" if info.get("kind") == "video" else "🖼️"
@@ -297,6 +343,16 @@ class ResultsWindow(ctk.CTkToplevel):
                     apply_emoji(widget=err, emoji_char="⚠️", text=f" {info['error']}")
                     err.pack(anchor="w", padx=12, pady=(0, 8))
                     continue
+
+                if verdict_status in ("pass", "fail", "warn"):
+                    badge = ctk.CTkLabel(
+                        card,
+                        text=f"{VERDICT_BADGE[verdict_status]}",
+                        font=("", 12, "bold"),
+                        text_color=VERDICT_COLOR[verdict_status],
+                        anchor="w",
+                    )
+                    badge.pack(anchor="w", padx=12, pady=(0, 2))
 
                 rows_frame = ctk.CTkFrame(card, fg_color="transparent")
                 rows_frame.pack(fill="x", padx=12, pady=(0, 8))
@@ -341,6 +397,153 @@ class ResultsWindow(ctk.CTkToplevel):
 
 
 # --------------------------------------------------------------------------
+# Custom target manager — add/edit/delete a client-specific QC spec, e.g.
+# "needs to be within -18 to -26 LKFS" from a QC rejection notice. Stored
+# via configModule (config.json's "custom_targets" key), same shape as
+# core.PLATFORM_TARGETS entries so evaluate_target() treats them identically.
+# --------------------------------------------------------------------------
+class ManageTargetsPopup(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.master_app = master
+        self.title("Manage Custom Targets")
+        width, height = 440, 400
+        x = (self.winfo_screenwidth() - width) // 2
+        y = (self.winfo_screenheight() - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y - 35}")
+        self.resizable(False, False)
+        self.grab_set()
+
+        ctk.CTkLabel(
+            self,
+            text="Custom delivery specs — e.g. a client-specific loudness\n"
+            "range from a QC rejection. Stored in config.json, hand-\n"
+            "editable there too if you'd rather skip this dialog.",
+            font=("", 11),
+            text_color="gray55",
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(14, 8))
+
+        existing_row = ctk.CTkFrame(self, fg_color="transparent")
+        existing_row.pack(fill="x", padx=16)
+        ctk.CTkLabel(existing_row, text="Edit existing:", font=("", 11)).pack(side="left")
+        self.existing_var = tk.StringVar(value="(new)")
+        self.existing_menu = ctk.CTkOptionMenu(
+            existing_row,
+            values=self._existing_names(),
+            variable=self.existing_var,
+            width=220,
+            command=self._on_pick_existing,
+        )
+        self.existing_menu.pack(side="left", padx=(8, 0))
+
+        form = ctk.CTkFrame(self, fg_color="transparent")
+        form.pack(fill="x", padx=16, pady=(14, 0))
+
+        self.name_var = tk.StringVar()
+        self.min_var = tk.StringVar()
+        self.max_var = tk.StringVar()
+        self.peak_var = tk.StringVar()
+        self.notes_var = tk.StringVar()
+
+        fields = [
+            ("Name", self.name_var, "e.g. Client X Broadcast Spot"),
+            ("LUFS min", self.min_var, "e.g. -26.0"),
+            ("LUFS max", self.max_var, "e.g. -18.0"),
+            ("True Peak max (dBTP)", self.peak_var, "e.g. -6.0 (optional)"),
+            ("Notes (optional)", self.notes_var, "e.g. QC rejection ref"),
+        ]
+        for row, (label, var, hint) in enumerate(fields):
+            ctk.CTkLabel(form, text=label, font=("", 11), anchor="w", width=150).grid(
+                row=row, column=0, sticky="w", pady=4
+            )
+            ctk.CTkEntry(form, textvariable=var, placeholder_text=hint, width=210).grid(
+                row=row, column=1, sticky="w", pady=4, padx=(6, 0)
+            )
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(18, 14), side="bottom")
+        ctk.CTkButton(btn_row, text="Save", command=self._on_save, width=90).pack(side="left")
+        ctk.CTkButton(
+            btn_row, text="Delete", fg_color="#8b2e2e", hover_color="#6e2424", command=self._on_delete, width=90
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(btn_row, text="Close", command=self.destroy, width=90).pack(side="right")
+
+    def _existing_names(self):
+        return ["(new)"] + list(load_custom_targets().keys())
+
+    def _on_pick_existing(self, name):
+        if name == "(new)":
+            self.name_var.set("")
+            self.min_var.set("")
+            self.max_var.set("")
+            self.peak_var.set("")
+            self.notes_var.set("")
+            return
+        spec = load_custom_targets().get(name, {})
+        self.name_var.set(name)
+        self.min_var.set("" if spec.get("lufs_min") is None else str(spec["lufs_min"]))
+        self.max_var.set("" if spec.get("lufs_max") is None else str(spec["lufs_max"]))
+        self.peak_var.set("" if spec.get("peak_dbtp_max") is None else str(spec["peak_dbtp_max"]))
+        self.notes_var.set(spec.get("notes", ""))
+
+    def _on_save(self):
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showerror("Missing name", "Give this target a name.")
+            return
+        try:
+            lufs_min = float(self.min_var.get())
+            lufs_max = float(self.max_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid range", "LUFS min/max must both be numbers, e.g. -26.0 and -18.0.")
+            return
+        if lufs_min >= lufs_max:
+            messagebox.showerror("Invalid range", "LUFS min must be less than LUFS max.")
+            return
+        peak_raw = self.peak_var.get().strip()
+        try:
+            peak_max = float(peak_raw) if peak_raw else None
+        except ValueError:
+            messagebox.showerror("Invalid peak", "True Peak max must be a number, e.g. -6.0 — or leave it blank.")
+            return
+
+        spec = {
+            "lufs_target": round((lufs_min + lufs_max) / 2, 1),
+            "lufs_min": lufs_min,
+            "lufs_max": lufs_max,
+            "peak_dbtp_max": peak_max,
+            "gated": "full-programme",
+            "kind": "delivery",
+            "notes": self.notes_var.get().strip(),
+        }
+        save_custom_target(name, spec)
+        self.existing_menu.configure(values=self._existing_names())
+        self.existing_var.set(name)
+        self.master_app._refresh_target_menu()
+        messagebox.showinfo("Saved", f"Saved custom target '{name}'.")
+
+    def _on_delete(self):
+        name = self.existing_var.get()
+        if name == "(new)":
+            # Not picked from the dropdown — maybe they typed an existing
+            # name directly into the Name field instead. Honor that too.
+            typed = self.name_var.get().strip()
+            if typed and typed in load_custom_targets():
+                name = typed
+            else:
+                messagebox.showinfo("Nothing to delete", 'Pick a target from "Edit existing" first.')
+                return
+        if not messagebox.askyesno("Delete Target", f"Delete custom target '{name}'?"):
+            return
+        delete_custom_target(name)
+        self.existing_var.set("(new)")
+        self.existing_menu.configure(values=self._existing_names())
+        self._on_pick_existing("(new)")
+        self.master_app._refresh_target_menu()
+
+
+# --------------------------------------------------------------------------
 # Main application window
 # --------------------------------------------------------------------------
 class App(AppBaseClass):  # type: ignore
@@ -351,7 +554,7 @@ class App(AppBaseClass):  # type: ignore
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         width = 540
-        height = 680
+        height = 720
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         self.title(__appname__)
@@ -447,6 +650,30 @@ class App(AppBaseClass):  # type: ignore
             justify="left",
         ).pack(anchor="w", padx=20, pady=(0, 6))
 
+        # --- Presets: bundle checkbox selections + a target so a QC pass
+        # doesn't mean re-toggling the same boxes every time ---
+        preset_row = ctk.CTkFrame(self, fg_color="transparent", border_width=0)
+        preset_row.pack(fill="x", padx=20, pady=(0, 8))
+        ctk.CTkLabel(preset_row, text="Preset:", font=("", 11), text_color="gray55").pack(side="left")
+        self.preset_var = tk.StringVar(value="Custom")
+        self.preset_menu = ctk.CTkOptionMenu(
+            preset_row,
+            values=self._preset_names(),
+            variable=self.preset_var,
+            width=170,
+            command=self._on_preset_selected,
+        )
+        self.preset_menu.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(preset_row, text="Save…", width=64, command=self._on_save_preset).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            preset_row,
+            text="Delete",
+            width=64,
+            fg_color="#8b2e2e",
+            hover_color="#6e2424",
+            command=self._on_delete_preset,
+        ).pack(side="left", padx=(8, 0))
+
         checks_frame = ctk.CTkFrame(self, fg_color="transparent")
         checks_frame.pack(fill="x", padx=20)
         self.check_vars = {}
@@ -463,12 +690,20 @@ class App(AppBaseClass):  # type: ignore
         self.platform_target_var = tk.StringVar(value="None")
         self.target_menu = ctk.CTkOptionMenu(
             target_row,
-            values=PLATFORM_TARGET_OPTIONS,
+            values=_all_target_names(),
             variable=self.platform_target_var,
             width=220,
             state="disabled",
         )
         self.target_menu.pack(side="left", padx=(8, 0))
+        self.manage_targets = ctk.CTkButton(
+            target_row,
+            text="Manage Targets…",
+            width=130,
+            command=self._open_manage_targets,
+            state="disabled",
+        )
+        self.manage_targets.pack(side="left", padx=(8, 0))
         # Comparison is only meaningful once Integrated Loudness is measured
         # (platform_delta_rows needs lufs_integrated, which only gets
         # populated when that checkbox is on) — gate the control on it.
@@ -487,10 +722,72 @@ class App(AppBaseClass):  # type: ignore
         if self.check_vars["lufs"].get():
             self.target_menu.configure(state="normal")
             self.target_label.configure(text_color=("gray10", "gray90"))
+            self.manage_targets.configure(state="normal")
         else:
             self.platform_target_var.set("None")
             self.target_menu.configure(state="disabled")
             self.target_label.configure(text_color="gray55")
+            self.manage_targets.configure(state="disabled")
+
+    # ---- Custom targets -----------------------------------------------------
+    def _open_manage_targets(self):
+        ManageTargetsPopup(self)
+
+    def _refresh_target_menu(self):
+        self.target_menu.configure(values=_all_target_names())
+
+    # ---- Presets -------------------------------------------------------------
+    def _preset_names(self):
+        return ["Custom"] + list(load_presets().keys())
+
+    def _on_preset_selected(self, name):
+        if name == "Custom":
+            # Clean slate, not "whatever was last loaded" — matches how
+            # Custom reads everywhere else in the UI.
+            for var in self.check_vars.values():
+                var.set(False)
+            self.platform_target_var.set("None")
+            return
+        preset = load_presets().get(name)
+        if not preset:
+            return
+        checks = preset.get("checks", {})
+        if checks == "all":
+            # Magic string, not a real wildcard (JSON has no such thing) —
+            # means "every checkbox that currently exists," so a preset
+            # saved this way stays "all" even after a future version adds
+            # new checkboxes, instead of freezing today's set forever.
+            for var in self.check_vars.values():
+                var.set(True)
+        else:
+            for key, val in checks.items():
+                if key in self.check_vars:
+                    self.check_vars[key].set(val)
+        target = preset.get("platform_target", "None")
+        self.platform_target_var.set(target if target in _all_target_names() else "None")
+
+    def _on_save_preset(self):
+        dialog = ctk.CTkInputDialog(text="Preset name:", title="Save Preset")
+        name = dialog.get_input()
+        if not name:
+            return
+        preset = {
+            "checks": {key: var.get() for key, var in self.check_vars.items()},
+            "platform_target": self.platform_target_var.get(),
+        }
+        save_preset(name, preset)
+        self.preset_menu.configure(values=self._preset_names())
+        self.preset_var.set(name)
+
+    def _on_delete_preset(self):
+        name = self.preset_var.get()
+        if name == "Custom":
+            return
+        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+            return
+        delete_preset(name)
+        self.preset_var.set("Custom")
+        self.preset_menu.configure(values=self._preset_names())
 
     def _toggle_appearance(self):
         new_mode = "Light" if ctk.get_appearance_mode() == "Dark" else "Dark"
@@ -592,6 +889,7 @@ class App(AppBaseClass):  # type: ignore
 
         options = {key: var.get() for key, var in self.check_vars.items()}
         options["platform_target"] = self.platform_target_var.get() if options.get("lufs") else "None"
+        options["custom_targets"] = load_custom_targets()
 
         self.start_btn.configure(state="disabled")
         popup = ProgressPopup(self, total)

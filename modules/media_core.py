@@ -446,49 +446,182 @@ def analyze_loudness(filepath, want_integrated, want_peak, timeout=600):
 
 
 # --------------------------------------------------------------------------
-# Platform loudness targets — all BS.1770-based measurements, they just
-# normalize to different reference LUFS values (and Netflix dialogue-gates
-# rather than measuring the full programme, which our ebur128 pass doesn't
-# replicate — flagged in the comparison row rather than silently assumed).
-# Sources: Spotify's own loudness docs (-14 LUFS / -1 dBTP via ITU 1770);
-# EBU R128 (-23 LUFS); ATSC A/85 (-24 LKFS, US broadcast); Netflix delivery
-# spec (-27 LKFS dialogue-gated, -2 dBTP ceiling); Apple Music Sound Check
-# (-16 LUFS); YouTube (~-14 LUFS).
+# Platform loudness targets — all BS.1770-based measurements. Two kinds:
+#
+#   "normalization" — streaming services that auto-adjust playback gain to
+#   their target (Spotify, YouTube, Apple Music). Missing the target isn't
+#   a delivery failure, it's just "they'll turn it up/down" — so these get
+#   no pass/fail verdict, only the informational delta row.
+#
+#   "delivery" — broadcast/streaming delivery specs where being outside
+#   tolerance is a real QC rejection. lufs_min/lufs_max encode the accepted
+#   range directly (not center+tolerance) because that's how these specs —
+#   and clients — actually state them ("needs to be within -18 to -26
+#   LKFS"). Sources, double-checked against current published specs rather
+#   than assumed:
+#     EBU R128 (Tech 3341/3343): target -23 LUFS, tolerance ±0.5 LU,
+#       true peak ≤ -1 dBTP.
+#     ATSC A/85 (CALM Act, US broadcast): target -24 LKFS, tolerance
+#       ±2 dB (the "Comfort Zone" the FCC enforces via CALM Act), true
+#       peak ≤ -2 dBTP.
+#     Netflix Sound Mix Specifications v1.6 (partnerhelp.netflixstudios.com):
+#       -27 LKFS dialogue-gated, tolerance ±2 LU, true peak ≤ -2 dBTP.
+#   Worth re-confirming against the current published spec doc before
+#   relying on this for an actual delivery sign-off — these get revised.
 # --------------------------------------------------------------------------
 PLATFORM_TARGETS = {
-    "Spotify / YouTube / Amazon / Tidal": {"lufs": -14.0, "peak_dbtp": -1.0, "gated": "full-programme"},
-    "Apple Music (Sound Check)": {"lufs": -16.0, "peak_dbtp": -1.0, "gated": "full-programme"},
-    "EBU R128 (Broadcast EU)": {"lufs": -23.0, "peak_dbtp": -1.0, "gated": "full-programme"},
-    "ATSC A/85 (US Broadcast)": {"lufs": -24.0, "peak_dbtp": -2.0, "gated": "full-programme"},
-    "Netflix (delivery spec)": {"lufs": -27.0, "peak_dbtp": -2.0, "gated": "dialogue"},
+    "Spotify / YouTube / Amazon / Tidal": {
+        "lufs_target": -14.0,
+        "lufs_min": None,
+        "lufs_max": None,
+        "peak_dbtp_max": -1.0,
+        "gated": "full-programme",
+        "kind": "normalization",
+    },
+    "Apple Music (Sound Check)": {
+        "lufs_target": -16.0,
+        "lufs_min": None,
+        "lufs_max": None,
+        "peak_dbtp_max": -1.0,
+        "gated": "full-programme",
+        "kind": "normalization",
+    },
+    "EBU R128 (Broadcast EU)": {
+        "lufs_target": -23.0,
+        "lufs_min": -23.5,
+        "lufs_max": -22.5,
+        "peak_dbtp_max": -1.0,
+        "gated": "full-programme",
+        "kind": "delivery",
+    },
+    "ATSC A/85 (US Broadcast)": {
+        "lufs_target": -24.0,
+        "lufs_min": -26.0,
+        "lufs_max": -22.0,
+        "peak_dbtp_max": -2.0,
+        "gated": "full-programme",
+        "kind": "delivery",
+    },
+    "Netflix (delivery spec)": {
+        "lufs_target": -27.0,
+        "lufs_min": -29.0,
+        "lufs_max": -25.0,
+        "peak_dbtp_max": -2.0,
+        "gated": "dialogue",
+        "kind": "delivery",
+    },
 }
 
 
-def platform_delta_rows(info, target_key):
+def resolve_target(target_key, custom_targets=None):
+    """Look up a target spec by name — checks caller-supplied custom
+    targets first (see configModule.load_custom_targets()) so a custom
+    profile can shadow a built-in name if you ever want that, then falls
+    back to the built-in PLATFORM_TARGETS."""
+    if custom_targets and target_key in custom_targets:
+        return custom_targets[target_key]
+    return PLATFORM_TARGETS.get(target_key)
+
+
+def evaluate_target(info, target):
+    """QC verdict for one file against one target spec. Returns
+    {"status": "pass"|"fail"|"warn"|"n/a", "notes": [str, ...]}.
+    "n/a" = normalization-only target, no pass/fail gate exists.
+    "warn" = the measurements needed to evaluate weren't taken (LUFS /
+    True Peak checkboxes weren't on for this scan)."""
+    if not target or target.get("kind") == "normalization":
+        return {"status": "n/a", "notes": []}
+
+    lufs = info.get("lufs_integrated")
+    peak = info.get("true_peak_db")
+    lufs_min, lufs_max = target.get("lufs_min"), target.get("lufs_max")
+    peak_max = target.get("peak_dbtp_max")
+
+    notes = []
+    ok = True
+    measured_anything = False
+
+    if lufs_min is not None and lufs_max is not None:
+        if lufs is None:
+            notes.append("loudness not measured")
+        else:
+            measured_anything = True
+            if not (lufs_min <= lufs <= lufs_max):
+                ok = False
+                notes.append(f"loudness {lufs:.1f} LUFS is outside {lufs_min:.1f} to {lufs_max:.1f} LKFS")
+
+    if peak_max is not None:
+        if peak is None:
+            notes.append("true peak not measured")
+        else:
+            measured_anything = True
+            if peak > peak_max:
+                ok = False
+                notes.append(f"true peak {peak:.1f} dBTP exceeds {peak_max:.1f} dBTP ceiling")
+
+    if not measured_anything:
+        return {"status": "warn", "notes": ["enable Integrated Loudness / True Peak to evaluate"]}
+    if not notes:
+        notes.append("within spec")
+    return {"status": "pass" if ok else "fail", "notes": notes}
+
+
+def scan_verdict_counts(scan_results, options):
+    """pass/fail/warn counts across a whole scan, for a results-window
+    summary badge. None if no target is selected."""
+    target_key = options.get("platform_target")
+    if not target_key or target_key == "None":
+        return None
+    target = resolve_target(target_key, options.get("custom_targets"))
+    if not target or target.get("kind") == "normalization":
+        return None
+    counts = {"pass": 0, "fail": 0, "warn": 0}
+    for entry in scan_results:
+        for _, info in entry["files"]:
+            if "error" in info:
+                continue
+            status = evaluate_target(info, target)["status"]
+            if status in counts:
+                counts[status] += 1
+    return counts
+
+
+def platform_delta_rows(info, target_key, custom_targets=None):
     """Extra (label, value) rows comparing measured LUFS/peak against a
-    platform target. Only meaningful if lufs/true_peak were measured."""
+    platform target, plus a QC verdict row for "delivery"-kind targets.
+    Only meaningful if lufs/true_peak were measured."""
     rows = []
-    target = PLATFORM_TARGETS.get(target_key)
+    target = resolve_target(target_key, custom_targets)
     if not target:
         return rows
 
     lufs = info.get("lufs_integrated")
     if lufs is not None:
-        delta = lufs - target["lufs"]
+        delta = lufs - target["lufs_target"]
         note = (
             " (dialogue-gated target — this is a full-programme measurement, treat as approximate)"
             if target["gated"] == "dialogue"
             else ""
         )
-        rows.append((f"Δ vs {target_key}", f"{delta:+.1f} LU  (target {target['lufs']:.0f} LUFS){note}"))
+        rows.append((f"Δ vs {target_key}", f"{delta:+.1f} LU  (target {target['lufs_target']:.0f} LUFS){note}"))
 
     peak = info.get("true_peak_db")
     if peak is not None:
-        over = peak - target["peak_dbtp"]
-        status = "OK" if over <= 0 else f"exceeds ceiling by {over:.1f} dB"
-        rows.append(
-            (f"True Peak vs {target_key}", f"{peak:.1f} dBTP  (limit {target['peak_dbtp']:.0f} dBTP — {status})")
+        peak_max = target.get("peak_dbtp_max")
+        if peak_max is not None:
+            over = peak - peak_max
+            status = "OK" if over <= 0 else f"exceeds ceiling by {over:.1f} dB"
+            rows.append((f"True Peak vs {target_key}", f"{peak:.1f} dBTP  (limit {peak_max:.0f} dBTP — {status})"))
+
+    verdict = evaluate_target(info, target)
+    if verdict["status"] != "n/a":
+        badge = {"pass": "✅ PASS", "fail": "❌ FAIL", "warn": "⚠️ INCOMPLETE"}[verdict["status"]]
+        range_note = (
+            f" (spec: {target['lufs_min']:.1f} to {target['lufs_max']:.1f} LKFS)"
+            if target.get("lufs_min") is not None
+            else ""
         )
+        rows.append((f"QC Verdict ({target_key})", f"{badge}{range_note} — {'; '.join(verdict['notes'])}"))
 
     return rows
 
@@ -618,7 +751,7 @@ def info_rows(info, options):
 
     platform_target = options.get("platform_target")
     if platform_target and platform_target != "None":
-        rows.extend(platform_delta_rows(info, platform_target))
+        rows.extend(platform_delta_rows(info, platform_target, options.get("custom_targets")))
 
     if options.get("tvc_slate"):
         if info.get("is_tvc_candidate"):
