@@ -227,3 +227,4 @@ tk_fonts_dump.txt
 notes
 bin/*/ff*
 *.dmg.zip
+*.rc
