@@ -28,6 +28,11 @@ if mac:
 
 is_dev_build = any(char.isalpha() for char in __version__script)
 
+import platform
+
+PLATFORM = platform.system()
+ARCH = platform.machine().lower()
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 SPEC_FILE = "N8MediaSniffer.spec"
@@ -227,10 +232,12 @@ def post_build_summary(build_label: str, count: int, success: bool):
             size_mb = 0
 
         print(f"  ✓ Build complete")
-        print(f"    Label   : {build_label}")
-        print(f"    Count   : {count}")
-        print(f"    Output  : {app_path}")
-        print(f"    Size    : {size_mb:.1f} MB")
+        print(f"    Label        : {build_label}")
+        print(f"    Count        : {count}")
+        print(f"    Platform     : {PLATFORM}")
+        print(f"    Architecture : {ARCH}")
+        print(f"    Output       : {app_path}")
+        print(f"    Size         : {size_mb:.1f} MB")
     else:
         print(f"  ✗ Build FAILED  (label: {build_label})")
         print(f"    build_count.json was already updated — decrement manually if needed")
@@ -658,7 +665,7 @@ def main():
             build_dmg()
 
             version = read_base_version()
-            FINAL_DMG_FILE_name = f"{FINAL_DMG_NAME}-{version}"
+            FINAL_DMG_FILE_name = f"{ARCH}-{FINAL_DMG_NAME}-{version}"
 
             try:
                 print("  Checking if existing dmgs and zips are in Dist folder...")
