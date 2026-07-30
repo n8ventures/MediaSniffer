@@ -54,7 +54,7 @@ hide_extension = [appname]
 # will be used to badge the system's Removable Disk icon. Badge icons require
 # pyobjc-framework-Quartz.
 #
-icon = "./assets/icons/mac/icoDMG.icns"
+icon = "./assets/icons/mac/iconDMG.icns"
 # Where to put the icons
 icon_locations = {appname: (120, 170), "Applications": (450, 170)}
 
