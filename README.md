@@ -1,6 +1,27 @@
 # Media Scanner GUI (GIF & Video)
 
+<div align="center">
+  <img src="docs/Preview_Sample.png" alt="Main Menu" width="300">
+</div>
+
+# Releases
+
+Stable release is available on Windows (x64) & MacOSX (Apple Silicon/ARM & Intel/86_64x).
+
+Download and check the latest release [here](https://github.com/n8ventures/MediaSniffer/releases/latest).
+
+or just directly download here without worry:
+
+[OSX (ARM/Apple Silicon)](https://github.com/n8ventures/MediaSniffer/releases/latest/download/MacOS-arm64-N8.s.Media.Sniffer.Installer-1.3.0.zip)
+
+[OSX (Intel/86_64x)](https://github.com/n8ventures/MediaSniffer/releases/latest/download/MacOS-x86_64-N8.s.Media.Sniffer.Installer-1.3.0.zip)
+
+[Windows](https://github.com/n8ventures/MediaSniffer/releases/latest/download/N8sMediaSniffer.exe)
+
+## Technicalities
+
 Two files:
+
 - `media_core.py` — all non-GUI logic: binary resolution, ffprobe/ffmpeg
   wrappers, metadata + loudness extraction, report builders.
 - `mainGUI.py` — the CustomTkinter application.
@@ -41,15 +62,3 @@ pip install r requirements.txt
   LUFS analysis on, since that's a full decode per file.
 - Results open in a separate scrollable, grouped-by-folder window. Bottom
   bar: **Save As** (HTML / Markdown / DOCX / TXT) and **Exit**.
-
-## Design notes / things you may want to tweak
-
-- `info_rows()` in `media_core.py` is the single source of truth for which
-  fields get shown/exported — the GUI results view and all four export
-  formats all call it, so they can't drift out of sync.
-- The checkbox → field mapping lives in `CHECKBOX_DEFS` at the top of
-  `gui_app.py` — add a tuple there plus a branch in `extract_info()` /
-  `info_rows()` in `media_core.py` to add more optional fields later.
-- LUFS/peak default timeout is 600s per file (`analyze_loudness(...,
-  timeout=600)`) — long 4K files could take a while to decode; adjust if
-  needed.
