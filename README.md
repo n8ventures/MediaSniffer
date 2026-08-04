@@ -1,4 +1,6 @@
-# Media Scanner GUI (GIF & Video)
+# N8's Media Sniffer 
+
+for GIF & Video.
 
 <div align="center">
   <img src="docs/Preview_Sample.png" alt="Main Menu" width="300">
