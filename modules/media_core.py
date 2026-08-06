@@ -340,6 +340,7 @@ def extract_info(filepath, options):
         info["frame_count"] = None
 
     info["bitrate"] = video_stream.get("bit_rate") or fmt.get("bit_rate")
+    info["scan_type"] = resolve_scan_type(video_stream.get("field_order"), filepath)
 
     # --- Audio presence (needed regardless of checkboxes, to know whether
     #     loudness analysis is even possible) ---
@@ -696,6 +697,85 @@ def analyze_slate_beep(filepath, window=TVC_SLATE_WINDOW, timeout=120):
 
 
 # --------------------------------------------------------------------------
+# Scan type (interlaced/progressive) — the field_order tag ffprobe reports
+# is free (already in the single ffprobe call every file gets), but it's
+# very commonly missing/"unknown" even on genuinely progressive files,
+# since plenty of NLE exports just don't bother signaling it. A tag-only
+# reading would, in that common case, just repeat what MediaInfo already
+# shows and stop there. This empirically detects it instead — ffmpeg's
+# `idet` filter classifies actual frame/field motion — but only for
+# untagged files, and only over a bounded sample (not the whole file),
+# so it doesn't turn "mandatory" into "always decode the whole thing."
+# --------------------------------------------------------------------------
+SCAN_TYPE_SAMPLE_WINDOW = 8  # seconds — enough for idet's multi-frame
+# detector to settle without a full decode
+SCAN_TYPE_MAJORITY = 0.9  # fraction of classified frames needed to call it
+
+
+def analyze_scan_type(filepath, window=SCAN_TYPE_SAMPLE_WINDOW, timeout=60):
+    """Empirical progressive/interlaced read via ffmpeg's idet filter,
+    sampling the first `window` seconds. Returns a display string, or None
+    if idet couldn't produce a confident read (e.g. too few frames in the
+    sample, or a genuinely mixed/telecined source)."""
+    ffmpeg_path, _ = resolve_binaries()
+    if not ffmpeg_path:
+        return None
+    cmd = [
+        ffmpeg_path,
+        "-nostats",
+        "-hide_banner",
+        "-t",
+        str(window),
+        "-i",
+        filepath,
+        "-filter:v",
+        "idet",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = _run(cmd, timeout=timeout)
+        text = result.stderr
+    except subprocess.TimeoutExpired:
+        return None
+
+    # idet reports two detectors — the "Multi frame" one looks at motion
+    # across frames and is the more reliable of the two, so that's the one
+    # used for the verdict; "Single frame" is a coarser first-pass measure.
+    m = re.search(
+        r"Multi frame detection: TFF:\s*(\d+)\s*BFF:\s*(\d+)\s*Progressive:\s*(\d+)\s*Undetermined:\s*(\d+)",
+        text,
+    )
+    if not m:
+        return None
+    tff, bff, progressive, undetermined = (int(x) for x in m.groups())
+    total = tff + bff + progressive + undetermined
+    if total == 0:
+        return None
+    if progressive / total >= SCAN_TYPE_MAJORITY:
+        return "Progressive (detected)"
+    if (tff + bff) / total >= SCAN_TYPE_MAJORITY:
+        return f"Interlaced, {'TFF' if tff >= bff else 'BFF'} (detected)"
+    return "Mixed / inconclusive"
+
+
+def resolve_scan_type(field_order, filepath):
+    """field_order tag first (free); empirical idet probe only when the
+    tag doesn't actually tell us anything."""
+    tagged = {
+        "progressive": "Progressive",
+        "tt": "Interlaced, TFF",
+        "tb": "Interlaced, TFF",
+        "bb": "Interlaced, BFF",
+        "bt": "Interlaced, BFF",
+    }.get(field_order)
+    if tagged:
+        return tagged
+    return analyze_scan_type(filepath) or "Unknown"
+
+
+# --------------------------------------------------------------------------
 # Row builder — single source of truth for required + optional fields,
 # used by the GUI results view and by every export format.
 # --------------------------------------------------------------------------
@@ -709,6 +789,7 @@ def info_rows(info, options):
         ),
         ("Dimensions", f"{info['width']}x{info['height']}" if info.get("width") else "N/A"),
         ("FPS", f"{info['fps']:.2f}" if info.get("fps") else "N/A"),
+        ("Scan Type", info.get("scan_type", "N/A")),
         ("Bitrate", human_bitrate(info.get("bitrate"))),
         ("Duration", human_duration(info.get("duration"), fps=info.get("fps"), frame_count=info.get("frame_count"))),
         ("Size", human_size(info.get("size_bytes"))),
