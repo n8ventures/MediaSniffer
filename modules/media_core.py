@@ -375,7 +375,7 @@ def extract_info(filepath, options):
 
     info["bitrate"] = video_stream.get("bit_rate") or fmt.get("bit_rate")
     info["scan_type"] = resolve_scan_type(
-        video_stream.get("field_order"), filepath, verify=options.get("verify_scan_type", False)
+        video_stream.get("field_order"), filepath, duration=duration, verify=options.get("verify_scan_type", False)
     )
 
     # --- Audio presence (needed regardless of checkboxes, to know whether
@@ -748,25 +748,39 @@ def analyze_slate_beep(filepath, window=TVC_SLATE_WINDOW, timeout=120):
 # untagged files, and only over a bounded sample (not the whole file),
 # so it doesn't turn "mandatory" into "always decode the whole thing."
 # --------------------------------------------------------------------------
-SCAN_TYPE_SAMPLE_WINDOW = 8  # seconds — enough for idet's multi-frame
-# detector to settle without a full decode
+SCAN_TYPE_SAMPLE_WINDOW = 8  # seconds — fallback sample for long-form content
+SCAN_TYPE_FULL_SCAN_MAX_DURATION = 40  # seconds — covers virtually every
+# TVC/social spot length; anything this short gets the WHOLE file
+# analyzed instead of a fixed head sample. idet needs real motion to
+# classify a frame at all — an 8s window on e.g. a static, graphic-heavy
+# square social ad can leave too few classified frames to ever reach a
+# confident verdict, even though the file is short enough that scanning
+# all of it costs almost nothing extra.
 SCAN_TYPE_MAJORITY = 0.9  # fraction of classified frames needed to call it
 
 
-def analyze_scan_type(filepath, window=SCAN_TYPE_SAMPLE_WINDOW, timeout=60):
-    """Empirical progressive/interlaced read via ffmpeg's idet filter,
-    sampling the first `window` seconds. Returns a display string, or None
-    if idet couldn't produce a confident read (e.g. too few frames in the
-    sample, or a genuinely mixed/telecined source)."""
+def analyze_scan_type(filepath, duration=None, window=SCAN_TYPE_SAMPLE_WINDOW, timeout=60):
+    """Empirical progressive/interlaced read via ffmpeg's idet filter.
+    Samples the whole file for anything under SCAN_TYPE_FULL_SCAN_MAX_DURATION,
+    otherwise just the first `window` seconds. Returns a display string, or
+    None if idet couldn't produce a confident read (e.g. too few frames in
+    the sample, or a genuinely mixed/telecined source)."""
     ffmpeg_path, _ = resolve_binaries()
     if not ffmpeg_path:
         return None
+
+    try:
+        duration_f = float(duration) if duration else None
+    except (TypeError, ValueError):
+        duration_f = None
+    sample_window = duration_f if duration_f and duration_f <= SCAN_TYPE_FULL_SCAN_MAX_DURATION else window
+
     cmd = [
         ffmpeg_path,
         "-nostats",
         "-hide_banner",
         "-t",
-        str(window),
+        str(sample_window),
         "-i",
         filepath,
         "-filter:v",
@@ -791,17 +805,17 @@ def analyze_scan_type(filepath, window=SCAN_TYPE_SAMPLE_WINDOW, timeout=60):
     if not m:
         return None
     tff, bff, progressive, undetermined = (int(x) for x in m.groups())
-    total = tff + bff + progressive + undetermined
-    if total == 0:
-        return None
-    if progressive / total >= SCAN_TYPE_MAJORITY:
+    classified = tff + bff + progressive
+    if classified == 0:
+        return None  # sample was entirely Undetermined — not enough signal to say anything
+    if progressive / classified >= SCAN_TYPE_MAJORITY:
         return "Progressive (detected)"
-    if (tff + bff) / total >= SCAN_TYPE_MAJORITY:
+    if (tff + bff) / classified >= SCAN_TYPE_MAJORITY:
         return f"Interlaced, {'TFF' if tff >= bff else 'BFF'} (detected)"
     return "Mixed / inconclusive"
 
 
-def resolve_scan_type(field_order, filepath, verify=False):
+def resolve_scan_type(field_order, filepath, duration=None, verify=False):
     """field_order tag first (free). Untagged files always fall back to
     the empirical idet probe regardless of `verify`. Tagged files only get
     the (costlier) empirical probe when `verify=True` — and if the probe
@@ -816,11 +830,11 @@ def resolve_scan_type(field_order, filepath, verify=False):
     }.get(field_order)
 
     if not tag_label:
-        return analyze_scan_type(filepath) or "Unknown"
+        return analyze_scan_type(filepath, duration=duration) or "Unknown"
     if not verify:
         return tag_label
 
-    empirical = analyze_scan_type(filepath)
+    empirical = analyze_scan_type(filepath, duration=duration)
     if not empirical:
         return f"{tag_label} (unverified — sample inconclusive)"
     tag_kind = "Progressive" if tag_label == "Progressive" else "Interlaced"
