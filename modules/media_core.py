@@ -269,6 +269,40 @@ def format_codec_profile(codec_name, profile, level):
     return profile  # generic fallback: whatever ffprobe called it
 
 
+# format_long_name for ffmpeg's "mov,mp4,m4a,3gp,3g2,mj2" demuxer is
+# hardcoded to "QuickTime / MOV" regardless of which of those it's
+# actually parsing — one shared parser for the whole ISOBMFF/QuickTime
+# family, and ffmpeg never renamed the string when it grew to cover MP4
+# and friends. Accurate about the *parser*, misleading about the *file* —
+# an .mp4 reads as if it were secretly a .mov. major_brand (mandatory in
+# a valid ISOBMFF file) is what actually tells them apart.
+CONTAINER_BRAND_LABELS = {
+    "qt": "QuickTime MOV",
+    "isom": "MP4 (ISO Base Media)",
+    "iso2": "MP4 (ISO Base Media)",
+    "mp41": "MP4",
+    "mp42": "MP4",
+    "avc1": "MP4 (AVC)",
+    "M4A": "M4A (Apple Audio)",
+    "M4V": "M4V (Apple Video)",
+    "3gp4": "3GP",
+    "3gp5": "3GP",
+    "3g2a": "3G2",
+    "mj2s": "Motion JPEG 2000",
+    "dash": "MPEG-DASH segment",
+}
+
+
+def resolve_container_label(fmt):
+    long_name = fmt.get("format_long_name") or fmt.get("format_name") or "N/A"
+    if long_name != "QuickTime / MOV":
+        return long_name  # not the shared demuxer — its long_name is already accurate
+    major_brand = ((fmt.get("tags", {}) or {}).get("major_brand") or "").strip()
+    if not major_brand:
+        return long_name
+    return CONTAINER_BRAND_LABELS.get(major_brand, f"{long_name} (brand: {major_brand})")
+
+
 # --------------------------------------------------------------------------
 # ffprobe — required + optional metadata (single call per file)
 # --------------------------------------------------------------------------
@@ -368,7 +402,7 @@ def extract_info(filepath, options):
 
     # --- Optional: container/format name ---
     if options.get("container_info"):
-        info["container"] = fmt.get("format_long_name") or fmt.get("format_name") or "N/A"
+        info["container"] = resolve_container_label(fmt)
 
     # --- Optional: creation date ---
     if options.get("creation_date"):
