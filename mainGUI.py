@@ -183,6 +183,8 @@ CHECKBOX_DEFS = [
     ("creation_date", "Creation Date (metadata)", False),
     ("aspect_ratio", "Aspect Ratio", False),
     ("tvc_slate", "Detect TVC Slate Beep (.mov 22s/37s)", False),
+    ("defect_scan", "Black/Freeze/Silence Detection", False),
+    ("verify_scan_type", "Verify Scan Type (decode)", False),
 ]
 
 
@@ -640,13 +642,13 @@ class App(AppBaseClass):  # type: ignore
         self.withdraw()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        width = 540
-        height = 720
+        width = 560
+        height = 755
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         self.title(__appname__)
         self.geometry(f"{width}x{height}+{x}+{y-35}")
-        self.minsize(460, 560)
+        self.minsize(480, 600)
         self.resizable(False, False)
         self.update_idletasks()
 

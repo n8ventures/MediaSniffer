@@ -340,7 +340,9 @@ def extract_info(filepath, options):
         info["frame_count"] = None
 
     info["bitrate"] = video_stream.get("bit_rate") or fmt.get("bit_rate")
-    info["scan_type"] = resolve_scan_type(video_stream.get("field_order"), filepath)
+    info["scan_type"] = resolve_scan_type(
+        video_stream.get("field_order"), filepath, verify=options.get("verify_scan_type", False)
+    )
 
     # --- Audio presence (needed regardless of checkboxes, to know whether
     #     loudness analysis is even possible) ---
@@ -397,6 +399,11 @@ def extract_info(filepath, options):
         if info["is_tvc_candidate"] and info["has_audio"]:
             slate = analyze_slate_beep(filepath)
             info["slate_beep_peak_db"] = slate.get("true_peak_db")
+
+    # --- Optional: black frame / freeze frame / silence detection (full
+    #     decode — a defect can occur anywhere, so no bounded sample) ---
+    if options.get("defect_scan"):
+        info["defects"] = analyze_defects(filepath)
 
     return info
 
@@ -760,19 +767,107 @@ def analyze_scan_type(filepath, window=SCAN_TYPE_SAMPLE_WINDOW, timeout=60):
     return "Mixed / inconclusive"
 
 
-def resolve_scan_type(field_order, filepath):
-    """field_order tag first (free); empirical idet probe only when the
-    tag doesn't actually tell us anything."""
-    tagged = {
+def resolve_scan_type(field_order, filepath, verify=False):
+    """field_order tag first (free). Untagged files always fall back to
+    the empirical idet probe regardless of `verify`. Tagged files only get
+    the (costlier) empirical probe when `verify=True` — and if the probe
+    disagrees with the tag, that mismatch is itself a real finding worth
+    surfacing rather than silently trusting whichever one."""
+    tag_label = {
         "progressive": "Progressive",
         "tt": "Interlaced, TFF",
         "tb": "Interlaced, TFF",
         "bb": "Interlaced, BFF",
         "bt": "Interlaced, BFF",
     }.get(field_order)
-    if tagged:
-        return tagged
-    return analyze_scan_type(filepath) or "Unknown"
+
+    if not tag_label:
+        return analyze_scan_type(filepath) or "Unknown"
+    if not verify:
+        return tag_label
+
+    empirical = analyze_scan_type(filepath)
+    if not empirical:
+        return f"{tag_label} (unverified — sample inconclusive)"
+    tag_kind = "Progressive" if tag_label == "Progressive" else "Interlaced"
+    empirical_kind = (
+        "Progressive" if "Progressive" in empirical else ("Interlaced" if "Interlaced" in empirical else None)
+    )
+    if empirical_kind and tag_kind != empirical_kind:
+        return f"⚠️ Tag says {tag_label}, detected {empirical}"
+    return f"{tag_label} (verified)"
+
+
+# --------------------------------------------------------------------------
+# Black frame / freeze frame / silence detection — a defect can occur
+# anywhere in the file (unlike scan type or the TVC slate, which have a
+# reason to only look at a short window), so this can't be bounded to a
+# head sample without missing the point. That's also why it's checkbox-
+# gated rather than mandatory: it's a genuine full decode, same cost class
+# as Integrated Loudness. One ffmpeg pass does video (blackdetect +
+# freezedetect) and audio (silencedetect) together rather than three
+# separate decodes.
+# --------------------------------------------------------------------------
+DEFECT_BLACK_MIN_DURATION = 0.5  # seconds — ignores quick cuts/flashes
+DEFECT_FREEZE_MIN_DURATION = 0.5  # seconds — short-form (often 30s) spots
+# can hide a shorter freeze than ffmpeg's 2s default would catch
+DEFECT_FREEZE_NOISE_FLOOR = "-60dB"
+DEFECT_SILENCE_MIN_DURATION = 0.5  # seconds — filters out natural micro-pauses
+DEFECT_SILENCE_NOISE_FLOOR = "-30dB"
+
+
+def analyze_defects(filepath, timeout=600):
+    """Returns {"black": [(start, end, dur), ...], "freeze": [...],
+    "silence": [...], "error": str or None}, times in seconds. An entry's
+    `end`/`dur` can be None if the file ends while still black/frozen/
+    silent (ffmpeg only logs the end once the condition actually ends).
+    An empty list for a category is a real negative, not a skipped check."""
+    ffmpeg_path, _ = resolve_binaries()
+    if not ffmpeg_path:
+        return {"error": "ffmpeg not available"}
+    cmd = [
+        ffmpeg_path,
+        "-nostats",
+        "-hide_banner",
+        "-i",
+        filepath,
+        "-vf",
+        f"blackdetect=d={DEFECT_BLACK_MIN_DURATION}:pix_th=0.10,"
+        f"freezedetect=n={DEFECT_FREEZE_NOISE_FLOOR}:d={DEFECT_FREEZE_MIN_DURATION}",
+        "-af",
+        f"silencedetect=noise={DEFECT_SILENCE_NOISE_FLOOR}:d={DEFECT_SILENCE_MIN_DURATION}",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = _run(cmd, timeout=timeout)
+        text = result.stderr
+    except subprocess.TimeoutExpired:
+        return {"error": "scan timed out"}
+
+    black = [
+        (float(s), float(e), float(d))
+        for s, e, d in re.findall(r"black_start:\s*([\d.]+)\s*black_end:\s*([\d.]+)\s*black_duration:\s*([\d.]+)", text)
+    ]
+
+    freeze_starts = [float(x) for x in re.findall(r"freeze_start:\s*([\d.]+)", text)]
+    freeze_ends = [float(x) for x in re.findall(r"freeze_end:\s*([\d.]+)", text)]
+    freeze_durations = [float(x) for x in re.findall(r"freeze_duration:\s*([\d.]+)", text)]
+    if len(freeze_starts) == len(freeze_ends) == len(freeze_durations):
+        freeze = list(zip(freeze_starts, freeze_ends, freeze_durations))
+    else:
+        # File ended while still frozen — start got logged, end/duration
+        # never did. Pair up what matched, leave the rest open-ended.
+        freeze = [(s, e, d) for s, e, d in zip(freeze_starts, freeze_ends, freeze_durations)]
+        freeze += [(s, None, None) for s in freeze_starts[len(freeze) :]]
+
+    silence_starts = [float(x) for x in re.findall(r"silence_start:\s*([\d.]+)", text)]
+    silence_pairs = re.findall(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)", text)
+    silence = [(s, float(e), float(d)) for s, (e, d) in zip(silence_starts, silence_pairs)]
+    silence += [(s, None, None) for s in silence_starts[len(silence_pairs) :]]
+
+    return {"black": black, "freeze": freeze, "silence": silence, "error": None}
 
 
 # --------------------------------------------------------------------------
@@ -840,6 +935,29 @@ def info_rows(info, options):
             rows.append(("Slate Beep Peak (first 7s)", f"{v:.1f} dBTP" if v is not None else "N/A"))
         else:
             rows.append(("Slate Beep Peak", "N/A (not a 22s/37s .mov match)"))
+
+    if options.get("defect_scan"):
+        defects = info.get("defects") or {}
+        if defects.get("error"):
+            rows.append(("Defect Scan", f"⚠️ scan failed — {defects['error']}"))
+        else:
+            parts = []
+            for start, end, dur in defects.get("black", []):
+                parts.append(f"Black {start:.1f}\u2013{end:.1f}s ({dur:.1f}s)")
+            for start, end, dur in defects.get("freeze", []):
+                if end is not None:
+                    parts.append(f"Freeze {start:.1f}\u2013{end:.1f}s ({dur:.1f}s)")
+                else:
+                    parts.append(f"Freeze from {start:.1f}s (still frozen at file end)")
+            for start, end, dur in defects.get("silence", []):
+                if end is not None:
+                    parts.append(f"Silence {start:.1f}\u2013{end:.1f}s ({dur:.1f}s)")
+                else:
+                    parts.append(f"Silence from {start:.1f}s (still silent at file end)")
+            if parts:
+                rows.append(("Defect Scan", f"⚠️ {len(parts)} issue(s): " + "; ".join(parts)))
+            else:
+                rows.append(("Defect Scan", "✅ No black frames, freezes, or silence detected"))
 
     return rows
 
