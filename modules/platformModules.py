@@ -157,7 +157,7 @@ else:
 if bundle_path:
     if mac:
         # log_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Logs")
-        config_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Config")
+        config_dir = os.path.expanduser(f"~/Library/Application Support/N8VENTURES/{__appname__}/Config")
     elif win:
         # log_dir = os.path.join(os.environ["LOCALAPPDATA"], __appname__, "Logs")
         config_dir = os.path.join(os.environ["LOCALAPPDATA"], "N8VENTURES", __appname__, "Config")
