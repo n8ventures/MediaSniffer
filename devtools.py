@@ -582,7 +582,7 @@ def build_dmg(app_name="N8's Media Sniffer"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Video To Gifski build tool")
+    parser = argparse.ArgumentParser(description="N8VENTURES build tool - Media Sniffer Edition.")
     parser.add_argument("--dry", action="store_true", help="Preview version, skip build")
     parser.add_argument("--reset", action="store_true", help="Reset build counter to 0")
     parser.add_argument("--count", type=int, help="Override build count (doesn't save)")
