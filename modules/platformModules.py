@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import tempfile
 import os
+import shutil
 
 # Check the platform
 current_platform = platform.system()
@@ -154,13 +155,32 @@ else:
         )
 
 
+CONFIG_VENDOR = "N8VENTURES"
+
+
+def migrate_legacy_config_dir(support_dir):
+    support_dir = Path(support_dir)
+    legacy_dir = support_dir / __appname__
+    config_root = support_dir / CONFIG_VENDOR
+    config_dir = config_root / __appname__
+
+    if legacy_dir.is_dir() and not config_dir.exists():
+        try:
+            config_root.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy_dir), str(config_dir))
+        except OSError:
+            pass
+
+    return config_dir
+
+
 if bundle_path:
     if mac:
-        # log_dir = os.path.expanduser(f"~/Library/Application Support/{__appname__}/Logs")
-        config_dir = os.path.expanduser(f"~/Library/Application Support/N8VENTURES/{__appname__}/Config")
+        support_dir = Path.home() / "Library" / "Application Support"
+        config_dir = migrate_legacy_config_dir(support_dir) / "Config"
     elif win:
-        # log_dir = os.path.join(os.environ["LOCALAPPDATA"], __appname__, "Logs")
-        config_dir = os.path.join(os.environ["LOCALAPPDATA"], "N8VENTURES", __appname__, "Config")
+        support_dir = Path(os.environ["LOCALAPPDATA"])
+        config_dir = migrate_legacy_config_dir(support_dir) / "Config"
 
     # temp_dir = os.path.join(tempfile.gettempdir(), __appname__)
 
